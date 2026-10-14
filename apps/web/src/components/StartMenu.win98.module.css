@@ -34,9 +34,9 @@
 .panel {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
 }
 
 /* XP 전용 머리글은 쓰지 않는다 */
@@ -44,9 +44,12 @@
   display: none;
 }
 
+/* 화면이 낮으면 목록만 스크롤한다 — 아래 테마 버튼(.footer)은 항상 보여야 한다 */
 .columns {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
 }
 .left,
 .right {
@@ -114,6 +117,7 @@
 }
 
 .footer {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
