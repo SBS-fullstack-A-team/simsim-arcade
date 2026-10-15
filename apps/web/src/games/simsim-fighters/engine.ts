@@ -145,6 +145,18 @@ export class FightEngine {
     this.raf = requestAnimationFrame(this.frame);
   }
 
+  /** 다른 캔버스로 옮겨 그린다 (크게 보기로 바뀌면 캔버스가 새로 만들어진다) */
+  attach(canvas: HTMLCanvasElement) {
+    if (canvas === this.canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    this.canvas = canvas;
+    this.ctx = ctx;
+    this.canvas.width = 0;
+    this.resizeCanvas();
+    this.stage = new StageRenderer(this.stageIdx, this.canvas.width / VIEW_W);
+  }
+
   destroy() {
     cancelAnimationFrame(this.raf);
     window.removeEventListener('resize', this.onResize);

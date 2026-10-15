@@ -110,8 +110,10 @@ export default function SimsimFighters({ onFinish }: GameProps) {
     match: 0,
   });
 
+  // 크게 보기로 바뀌면 캔버스가 새로 만들어지므로 엔진이 새 캔버스에 그리도록 옮겨 준다
   const setCanvas = useCallback((el: HTMLCanvasElement | null) => {
     canvasRef.current = el;
+    if (el) engineRef.current?.attach(el);
   }, []);
 
   useEffect(() => {
