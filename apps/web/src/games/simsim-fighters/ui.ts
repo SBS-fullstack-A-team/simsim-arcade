@@ -12,7 +12,7 @@ import {
   VIEW_W,
 } from './config';
 import type { Fighter, SimEvent } from './fighter';
-import { drawPortrait } from './renderFighter';
+import { drawPortrait, portraitIcon } from './renderFighter';
 import type { FightSim } from './sim';
 
 const TAU = Math.PI * 2;
@@ -258,7 +258,9 @@ export class UIManager {
     ctx.clip();
     ctx.translate(ix, 0);
     ctx.scale(side === 0 ? 1 : -1, 1);
-    drawPortrait(ctx, f.def, 2, 36 + 128 * 0.55, 0.55 / f.def.scale, time, 'idle');
+    // 아이콘은 한 번 그려 둔 그림을 다시 쓴다
+    const icon = portraitIcon(f.def);
+    if (icon) ctx.drawImage(icon, -26, 10, 52, 52);
     ctx.restore();
 
     // 이름
