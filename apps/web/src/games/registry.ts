@@ -8,6 +8,7 @@ import fruitSlicerThumbnail from './fruit-slicer/thumbnail.svg';
 import hintQuizThumbnail from './hint-quiz/thumbnail.svg';
 import imjin50Thumbnail from './imjin-50/thumbnail.svg';
 import ruinsDashThumbnail from './ruins-dash/thumbnail.webp';
+import simsimFightersThumbnail from './simsim-fighters/thumbnail.svg';
 import skyAceThumbnail from './sky-ace/thumbnail.webp';
 import wormArenaThumbnail from './worm-arena/thumbnail.svg';
 
@@ -146,6 +147,16 @@ const GAME_ENTRIES: readonly GameEntry[] = [
     category: 'arcade',
     owner: '경수',
     component: lazy(() => import('./worm-arena')),
+  },
+  {
+    id: 'simsim-fighters',
+    name: '심심파이터즈',
+    description:
+      '15인의 파이터 · 텐션 게이지 · 초필살기 컷인! AI 아케이드와 WebRTC 온라인 1:1 대전 격투',
+    thumbnail: simsimFightersThumbnail,
+    category: 'arcade',
+    owner: '신영',
+    component: lazy(() => import('./simsim-fighters')),
   },
 ];
 
