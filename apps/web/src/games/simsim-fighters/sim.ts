@@ -16,7 +16,7 @@ import {
 } from './config';
 import { ULT_EXPLOSION, type CharId, type ProjSpec } from './characters';
 import { Fighter, type FighterWorld, type SimEvent } from './fighter';
-import { HitboxManager, type HitWorld, type Projectile } from './hitbox';
+import { HitboxManager, toCloud, type HitWorld, type Projectile } from './hitbox';
 
 export type Phase = 'intro' | 'fight' | 'ko' | 'matchEnd';
 
@@ -84,25 +84,48 @@ export class FightSim implements HitWorld, FighterWorld {
     const s = owner.def.scale;
     let x = owner.x + f * (spec.x + index * spec.step) * (spec.step ? 1 : s);
     let y = owner.h + spec.y * s;
+    let vx = spec.vx * f;
+    let face = f;
     if (spec.sky) {
       x = spec.aim ? opp.x : owner.x + f * (spec.x + index * spec.spread);
       y = GROUND_Y + spec.h / 2;
     }
+    if (spec.atOpp) {
+      // 상대가 서 있는 자리 (땅 기준)
+      x = opp.x;
+      y = spec.y;
+    }
+    if (spec.flank) {
+      // 분신 — 상대 양옆을 번갈아 나타나 상대 쪽으로 덮친다
+      const side = index % 2 === 0 ? -f : f;
+      x = opp.x + side * spec.x;
+      y = opp.h + spec.y;
+      vx = -side * Math.abs(spec.vx);
+      face = vx >= 0 ? 1 : -1;
+    }
     // 같은 줄로 여러 발 쏘는 기술은 높이를 조금씩 다르게
-    if (spec.count > 2 && !spec.sky && !spec.step) y += ((index % 3) - 1) * 14;
+    if (spec.count > 2 && !spec.sky && !spec.step && !spec.flank && !spec.fan) {
+      y += ((index % 3) - 1) * 14;
+    }
     // 공중에서 쏘면 비스듬히 아래로 (땅에 닿으면 사라진다)
     const airShot = owner.airborne && !!owner.moveDef?.airOk && !spec.sky;
-    const vy = airShot ? -Math.abs(spec.vx) * 0.55 : spec.vy;
+    let vy = airShot ? -Math.abs(spec.vx) * 0.55 : spec.vy;
+    if (spec.fan && spec.count > 1) {
+      // 부채꼴 — 위에서 아래로 훑으며 쏜다
+      const a = spec.fan * (0.5 - index / (spec.count - 1));
+      vx = Math.cos(a) * spec.vx * f;
+      vy = Math.sin(a) * spec.vx;
+    }
     const gravity = airShot ? 0.0001 : spec.gravity;
     const ult = owner.move === 'ult';
     this.projectiles.push({
       id: this.nextId++,
       owner: owner.side,
       fx: spec.fx,
-      facing: f,
+      facing: face,
       x: this.clampX(x),
       y,
-      vx: spec.vx * f,
+      vx,
       vy,
       gravity,
       w: spec.w,
@@ -131,13 +154,20 @@ export class FightSim implements HitWorld, FighterWorld {
       otg: spec.fx === 'explosion',
       dead: false,
       boomerang: spec.boomerang,
-      speed0: spec.vx * f,
+      speed0: vx,
       wave: spec.wave,
       waveBase: y,
       growW: spec.growW,
       growH: spec.growH,
       dot: spec.dot,
       slow: spec.slow,
+      look: spec.look,
+      trackX: spec.trackX,
+      suck: spec.suck,
+      drain: spec.drain,
+      explode: spec.explode,
+      linger0: spec.linger,
+      freeze: spec.freeze,
     });
     this.emit({ type: 'projectile', side: owner.side, fx: spec.fx, x, y });
   }
@@ -167,6 +197,7 @@ export class FightSim implements HitWorld, FighterWorld {
     const control = this.phase === 'fight';
     p1.update(p2, this, control);
     p2.update(p1, this, control);
+    this.applyHolds();
     this.updateFacing();
     this.separate();
     this.updateProjectiles();
@@ -233,6 +264,42 @@ export class FightSim implements HitWorld, FighterWorld {
     }
   }
 
+  /** 붙잡힘 · 얼어붙음 — 붙잡은 기술이 이어지는 동안 상대를 그 자리에 묶거나 들고 간다 */
+  private applyHolds() {
+    for (const f of this.fighters) {
+      if (f.act === 'ko') {
+        f.lockedBy = 0;
+        f.frozenT = 0;
+        continue;
+      }
+      if (f.lockedBy) {
+        const att = this.fighters[f.lockedBy === 1 ? 0 : 1];
+        const d = att.moveDef;
+        const holding = att.act === 'attack' && !!d && !!d.lock && att.t <= d.startup + d.active;
+        if (!holding || !d) {
+          f.lockedBy = 0;
+        } else if (d.lock === 'carry') {
+          f.x = this.clampX(att.x + att.facing * 44 * att.def.scale);
+          f.h = Math.max(0.01, att.h + 30);
+          f.vx = 0;
+          f.vy = att.vy;
+          f.stun = Math.max(f.stun, 12);
+        } else {
+          f.vx = 0;
+          f.vy = 0;
+          if (f.h > 0) f.h = Math.max(0.01, f.lockH);
+          f.stun = Math.max(f.stun, 12);
+        }
+      }
+      if (f.frozenT > 0) {
+        f.frozenT--;
+        f.vx = 0;
+        if (f.h > 0) f.vy = 0;
+        if (f.act === 'hitstun') f.stun = Math.max(f.stun, 2);
+      }
+    }
+  }
+
   /** 몸끼리 겹치지 않게 밀어내고, 벽과 최대 거리를 지킨다 */
   private separate() {
     const [a, b] = this.fighters;
@@ -252,7 +319,9 @@ export class FightSim implements HitWorld, FighterWorld {
       a.act !== 'knockdown' &&
       b.act !== 'knockdown' &&
       !passing(a) &&
-      !passing(b);
+      !passing(b) &&
+      !a.lockedBy &&
+      !b.lockedBy;
     const dx = b.x - a.x;
     const minD = wa + wb;
     if (vertical && solid && Math.abs(dx) < minD) {
@@ -305,6 +374,20 @@ export class FightSim implements HitWorld, FighterWorld {
           const owner = this.fighters[p.owner];
           if (p.age > p.life / 2 && Math.abs(p.x - owner.x) < 30) p.dead = true;
         }
+        if (p.trackX > 0) {
+          // 위성 레이저 — 상대를 따라 좌우로 움직인다
+          const target = p.owner === 0 ? p2 : p1;
+          const dx = target.x - p.x;
+          p.x += Math.max(-p.trackX, Math.min(p.trackX, dx));
+        }
+        if (p.suck > 0 && p.age >= p.delay) {
+          // 블랙홀 — 가까운 상대를 가운데로 빨아들인다 (막아도 끌려온다)
+          const target = p.owner === 0 ? p2 : p1;
+          const dx = p.x - target.x;
+          if (Math.abs(dx) < 420 && target.act !== 'knockdown' && target.act !== 'ko') {
+            target.x = this.clampX(target.x + Math.sign(dx) * Math.min(Math.abs(dx), p.suck));
+          }
+        }
         p.x += p.vx;
         if (p.wave > 0) {
           // 음파 — 위아래로 출렁인다
@@ -339,7 +422,11 @@ export class FightSim implements HitWorld, FighterWorld {
           }
         }
       }
-      if (p.age >= p.life) p.dead = true;
+      if (p.age >= p.life) {
+        // 호문쿨루스는 아무것도 못 맞혀도 수명이 다하면 그 자리에서 터진다
+        if (p.explode && !p.landed) toCloud(p);
+        else p.dead = true;
+      }
       if (p.x < -100 || p.x > STAGE_W + 100) p.dead = true;
     }
     this.projectiles = this.projectiles.filter((p) => !p.dead);
