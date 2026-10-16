@@ -182,6 +182,14 @@ export class Fighter {
   armorUsed = 0;
   /** 다음 착지 때 바닥에서 한 번 튀어 오른다 */
   bounce = false;
+  /** 붙잡힘 — 붙잡은 쪽 (0: 없음 · 1: 1P · 2: 2P) 과 붙잡힌 높이 */
+  lockedBy = 0;
+  lockH = 0;
+  /** 얼어붙어 움직이지 못하는 남은 프레임 · 묶은 속성 (얼음 · 가시) */
+  frozenT = 0;
+  frozenFx = '';
+  /** 각성(오버드라이브) 남은 프레임 */
+  buffT = 0;
   /** 맞은 순간 하얗게 번쩍이는 연출용 */
   flash = 0;
   stats: FighterStats = { damage: 0, maxCombo: 0, supers: 0, bursts: 0, blocks: 0 };
@@ -264,6 +272,9 @@ export class Fighter {
     this.dotPer = 0;
     this.slowT = 0;
     this.bounce = false;
+    this.lockedBy = 0;
+    this.frozenT = 0;
+    this.buffT = 0;
   }
 
   /** 지속 피해 걸기 — 이미 걸려 있으면 남은 양에 더해 3초를 새로 센다 */
@@ -274,9 +285,9 @@ export class Fighter {
     this.dotFx = fx;
   }
 
-  /** 둔화 중이면 이동 속도 배율 */
+  /** 이동 속도 배율 — 둔화면 느리게, 각성 중이면 빠르게 */
   get slowMul() {
-    return this.slowT > 0 ? 0.6 : 1;
+    return (this.slowT > 0 ? 0.6 : 1) * (this.buffT > 0 ? 1.3 : 1);
   }
 
   addMeter(n: number) {
@@ -420,6 +431,7 @@ export class Fighter {
     if (!this.airborne && !d.air) this.vx = dashMomentum ? this.vx * 0.55 : 0;
     this.bufDash = 0;
     this.armorUsed = 0;
+    if (d.install > 0) this.buffT = d.install;
     this.move = id;
     this.setAct('attack');
     this.moveHits = 0;
@@ -453,6 +465,7 @@ export class Fighter {
     if (this.invul > 0) this.invul--;
     if (this.flash > 0) this.flash--;
     if (this.slowT > 0) this.slowT--;
+    if (this.buffT > 0) this.buffT--;
     if (this.dotT > 0) {
       this.dotT--;
       // 지속 피해로는 쓰러지지 않는다 (체력 1 까지만)
@@ -571,8 +584,13 @@ export class Fighter {
       }
     }
 
-    // 돌진 — 지속 동안 앞으로
-    if (d.selfVx > 0 && d.selfVy === 0 && !this.airborne) {
+    // 붙잡는 기술이 빗나가면 바로 회수한다 (끝까지 달려가지 않게)
+    if (d.lock && !this.connected && this.t === first + 16 && this.t < activeEnd) {
+      this.t = activeEnd;
+    }
+
+    // 돌진 — 지속 동안 앞으로 (붙잡은 뒤 순간이동 베기 중에는 멈춘다)
+    if (d.selfVx > 0 && d.selfVy === 0 && !this.airborne && !(d.blink && this.connected)) {
       if (this.t >= first && this.t <= activeEnd) this.vx = this.facing * d.selfVx;
       else if (this.t === activeEnd + 1) this.vx = 0;
     }
@@ -584,7 +602,12 @@ export class Fighter {
       this.t = total;
       return;
     }
-    if (this.t > total) this.toNeutral();
+    if (this.t > total) {
+      this.toNeutral();
+      return;
+    }
+    // 각성 중에는 회수가 두 배 빠르다
+    if (this.buffT > 0 && this.t > activeEnd && this.t < total && !this.airborne) this.t++;
   }
 
   private decide(world: FighterWorld) {

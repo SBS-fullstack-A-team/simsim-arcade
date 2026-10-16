@@ -18,6 +18,7 @@ import {
   fillStroke,
   hgrad,
   limb,
+  limbInk,
   line,
   poly,
   smoothPath,
@@ -310,8 +311,13 @@ function drawArm(ctx: CanvasRenderingContext2D, c: Ctx, back: boolean) {
   const fore = look.sleeve === 'long' ? pal.top : pal.skin;
   const muscle = c.male && look.sleeve === 'none' && !c.robot ? 2.4 : 0;
 
-  // 위팔
-  limb(ctx, sh, el, w.ua[0], w.ua[1], tn(upper), muscle);
+  const foreMuscle = c.male && look.sleeve !== 'long' && !c.robot ? 1.2 : 0;
+  // 팔 전체 실루엣을 먼저 깔고 위팔 · 아래팔을 외곽선 없이 칠한다 (팔꿈치 이음새 없음)
+  const ink = c.tint ?? INK;
+  limbInk(ctx, sh, el, w.ua[0], w.ua[1], muscle, ink);
+  limbInk(ctx, el, hand, w.fa[0], w.fa[1], foreMuscle, ink);
+  limb(ctx, sh, el, w.ua[0], w.ua[1], tn(upper), muscle, false);
+  limb(ctx, el, hand, w.fa[0], w.fa[1], tn(fore), foreMuscle, false);
   if (look.sleeve === 'short') {
     const m = at(sh, el, 0.55);
     limb(ctx, sh, m, w.ua[0] + 3.5, w.ua[0] + 2.5, tn(pal.top));
@@ -322,16 +328,7 @@ function drawArm(ctx: CanvasRenderingContext2D, c: Ctx, back: boolean) {
     circle(ctx, el[0], el[1], 3, tn(pal.accent).base, 0);
   }
 
-  // 아래팔
-  limb(
-    ctx,
-    el,
-    hand,
-    w.fa[0],
-    w.fa[1],
-    tn(fore),
-    c.male && look.sleeve !== 'long' && !c.robot ? 1.2 : 0,
-  );
+  // 소매 끝 · 장갑
   if (look.sleeve === 'long' && look.cuff && !look.glove) {
     line(ctx, [at(el, hand, 0.82), at(el, hand, 0.9)], c.tint ?? look.cuff, w.fa[1] + 3);
   }
@@ -373,28 +370,55 @@ function drawFist(ctx: CanvasRenderingContext2D, c: Ctx, hand: V, a: number, bac
   ctx.save();
   ctx.translate(hand[0], hand[1]);
   ctx.rotate(a);
+  // 주먹 — 손등은 둥글고, 앞쪽엔 손가락 마디 네 개가 동글동글 튀어나온다
+  const x0 = -fw * 0.4;
+  const x1 = fw * 0.55;
+  const top = -fh / 2;
+  const bot = fh / 2;
+  const knuck = fh / 4;
   ctx.beginPath();
-  ctx.roundRect(-fw * 0.35, -fh / 2, fw, fh, fh * 0.38);
-  fillStroke(ctx, p.base, 2.2);
-  // 아래쪽 그늘 · 손가락 마디
-  ctx.save();
-  ctx.clip();
-  ctx.fillStyle = p.shade;
-  ctx.fillRect(-fw, fh * 0.1, fw * 2, fh);
-  ctx.restore();
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = 1.1;
+  ctx.moveTo(x0, top + fh * 0.18);
+  ctx.quadraticCurveTo(x0, top, x0 + fw * 0.3, top);
+  ctx.lineTo(x1 - knuck * 0.5, top);
+  for (let i = 0; i < 4; i++) {
+    const y = top + knuck * (i + 0.5);
+    ctx.arc(x1 - knuck * 0.5, y, knuck * 0.55, -Math.PI / 2, Math.PI / 2);
+  }
+  ctx.lineTo(x0 + fw * 0.25, bot);
+  ctx.quadraticCurveTo(x0, bot, x0, bot - fh * 0.2);
+  ctx.closePath();
+  const g = vgrad(
+    ctx,
+    top,
+    bot,
+    [
+      [0, p.light],
+      [0.4, p.base],
+      [1, p.shade],
+    ],
+    c.tint,
+  );
+  fillStroke(ctx, g, 2);
+  // 손가락 사이 선
+  ctx.strokeStyle = c.tint ?? p.deep;
+  ctx.lineWidth = 0.9;
   ctx.beginPath();
   for (let i = 1; i < 4; i++) {
-    const y = -fh / 2 + (fh * i) / 4;
-    ctx.moveTo(fw * 0.42, y);
-    ctx.lineTo(fw * 0.62, y);
+    const y = top + knuck * i;
+    ctx.moveTo(x1 - knuck * 1.3, y);
+    ctx.lineTo(x1 - knuck * 0.2, y);
   }
   ctx.stroke();
-  // 엄지
+  // 엄지 — 손가락 위를 감싼다
   ctx.beginPath();
-  ctx.ellipse(fw * 0.1, -fh * 0.45, fw * 0.28, fh * 0.2, 0.3, 0, TAU);
-  fillStroke(ctx, p.base, 1.6);
+  ctx.ellipse(fw * 0.12, top + fh * 0.12, fw * 0.3, fh * 0.17, 0.15, 0, TAU);
+  fillStroke(ctx, p.base, 1.4);
+  if (!c.tint) {
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.beginPath();
+    ctx.ellipse(x0 + fw * 0.35, top + fh * 0.22, fw * 0.18, fh * 0.08, 0, 0, TAU);
+    ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -455,8 +479,14 @@ function drawLeg(ctx: CanvasRenderingContext2D, c: Ctx, back: boolean) {
   const shinCol = look.pants === 'long' ? pal.bottom : bare;
   const ankle: V = [foot[0], foot[1] - 4];
 
-  limb(ctx, hip, knee, w.th[0], w.th[1], tn(thighCol), c.male && !c.robot ? 1.4 : 0);
-  limb(ctx, knee, ankle, w.sh[0], w.sh[1], tn(shinCol), c.male && !c.robot ? 1.2 : 0.6);
+  // 다리 전체 실루엣을 먼저 깔고 허벅지 · 정강이를 외곽선 없이 칠한다 (무릎 이음새 없음)
+  const thighM = c.male && !c.robot ? 1.4 : 0;
+  const shinM = c.male && !c.robot ? 1.2 : 0.6;
+  const ink = c.tint ?? INK;
+  limbInk(ctx, hip, knee, w.th[0], w.th[1], thighM, ink);
+  limbInk(ctx, knee, ankle, w.sh[0], w.sh[1], shinM, ink);
+  limb(ctx, hip, knee, w.th[0], w.th[1], tn(thighCol), thighM, false);
+  limb(ctx, knee, ankle, w.sh[0], w.sh[1], tn(shinCol), shinM, false);
 
   if (look.stripe && !c.tint && !c.st.puppet) {
     stripes(ctx, hip, knee, w.th[0], w.th[1], look.stripe, back);
@@ -4767,6 +4797,8 @@ export function drawFighter(
 
 /** 슈퍼아머(주황) · 받아치기(하늘색) 기술 중이면 테두리 색 */
 function moveAuraColor(f: Fighter, time: number): string | null {
+  // 오버드라이브(각성) 중에는 늘 전기빛 테두리
+  if (f.buffT > 0) return `rgba(90,235,255,${0.5 + Math.sin(time * 40) * 0.3})`;
   const d = f.moveDef;
   if (f.act !== 'attack' || !d || f.t > d.startup + d.active) return null;
   const pulse = 0.55 + Math.sin(time * 30) * 0.25;
@@ -4777,6 +4809,45 @@ function moveAuraColor(f: Fighter, time: number): string | null {
 
 /** 상태 이상 표시 — 출혈 · 맹독은 몸에서 방울이 떨어지고, 둔화는 발밑이 얼어붙는다 */
 function drawStatus(ctx: CanvasRenderingContext2D, f: Fighter, time: number) {
+  if (f.buffT > 0) {
+    // 오버드라이브 — 몸을 감싸고 튀는 전기
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const seed = Math.floor(time * 20);
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const s = Math.sin(seed * 12.9 + i * 78.2) * 43758.5;
+      const r = s - Math.floor(s);
+      const x0 = (r - 0.5) * 50;
+      const y0 = -30 - r * 110;
+      ctx.strokeStyle = i % 2 ? 'rgba(255,243,106,0.9)' : 'rgba(80,230,255,0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x0 + 10, y0 - 8);
+      ctx.lineTo(x0 + 4, y0 - 14);
+      ctx.lineTo(x0 + 16, y0 - 24);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  if (f.frozenT > 0 && f.frozenFx === 'rose') {
+    // 가시 덩굴에 휘감김
+    ctx.save();
+    ctx.strokeStyle = '#2e8a3a';
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      for (let y = 0; y <= 130; y += 10) {
+        const x = Math.sin(y * 0.08 + i * 2.1 + time * 2) * 26;
+        if (y === 0) ctx.moveTo(x, -y);
+        else ctx.lineTo(x, -y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
   if (f.dotT > 0) {
     const col =
       f.dotFx === 'blood' || f.dotFx === 'rose'
@@ -4797,6 +4868,46 @@ function drawStatus(ctx: CanvasRenderingContext2D, f: Fighter, time: number) {
       ctx.quadraticCurveTo(x - 3, y + 1, x, y - 4);
       ctx.fill();
     }
+    ctx.restore();
+  }
+  if (f.frozenT > 0 && f.frozenFx === 'ice') {
+    // 절대영도 — 몸 전체가 얼음 덩어리에 갇힌다
+    ctx.save();
+    const g = ctx.createLinearGradient(-40, -170, 40, 0);
+    g.addColorStop(0, 'rgba(255,255,255,0.75)');
+    g.addColorStop(0.4, 'rgba(170,225,255,0.5)');
+    g.addColorStop(1, 'rgba(90,170,240,0.6)');
+    ctx.fillStyle = g;
+    ctx.strokeStyle = 'rgba(40,110,190,0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-38, 0);
+    ctx.lineTo(-46, -70);
+    ctx.lineTo(-30, -150);
+    ctx.lineTo(4, -172);
+    ctx.lineTo(36, -140);
+    ctx.lineTo(46, -60);
+    ctx.lineTo(34, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-30, -130);
+    ctx.lineTo(-36, -70);
+    ctx.moveTo(-20, -150);
+    ctx.lineTo(-4, -160);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.beginPath();
+    ctx.moveTo(4, -172);
+    ctx.lineTo(10, -90);
+    ctx.lineTo(34, 0);
+    ctx.moveTo(10, -90);
+    ctx.lineTo(-38, 0);
+    ctx.stroke();
     ctx.restore();
   }
   if (f.slowT > 0) {

@@ -52,6 +52,26 @@ export interface Projectile {
   growH: number;
   dot: number;
   slow: number;
+  look: string;
+  trackX: number;
+  suck: number;
+  drain: number;
+  explode: boolean;
+  linger0: number;
+  freeze: number;
+}
+
+/** 호문쿨루스 · 독병 — 그 자리에서 큰 독구름으로 바뀐다 */
+export function toCloud(p: Projectile) {
+  p.landed = true;
+  p.explode = false;
+  p.vx = 0;
+  p.vy = 0;
+  p.w = p.look === 'homunculus' ? 220 : 96;
+  p.h = p.look === 'homunculus' ? 130 : 70;
+  p.y = p.h / 2;
+  p.life = p.age + Math.max(1, p.linger0);
+  p.dead = false;
 }
 
 /** 맞았을 때 적용할 값 (근접 기술 · 투사체 공통) */
@@ -77,6 +97,7 @@ interface HitParams {
   slow: number;
   drain: number;
   bounce: boolean;
+  freeze: number;
 }
 
 /** 시뮬레이션이 HitboxManager 에게 열어 주는 기능 */
@@ -160,12 +181,38 @@ export class HitboxManager {
           slow: d.slow,
           drain: d.drain,
           bounce: last && d.bounce,
+          freeze: d.freeze && !last ? d.freeze : 0,
         },
         (box.cx + hurt.cx) / 2,
         Math.min(box.cy, hurt.cy + hurt.h / 3),
       );
       // 받아치기에 막히면 맞힌 것으로 치지 않는다 (캔슬 불가)
       if (r === 'parry') att.connected = false;
+      if (r === 'hit' && !last) {
+        // 붙잡기 — 기술이 끝날 때까지 상대를 묶거나 들고 간다
+        if (d.lock && !vic.lockedBy) {
+          vic.lockedBy = att.side + 1;
+          vic.lockH = vic.h;
+        }
+        // 순간이동 베기 — 묶인 상대 반대편으로 번갈아 넘어간다
+        if (d.blink) {
+          const side = att.moveHits % 2 === 1 ? 1 : -1;
+          att.x = world.clampX(vic.x + side * 74);
+          att.facing = vic.x >= att.x ? 1 : -1;
+          att.vx = 0;
+          world.emit({ type: 'teleport', side: att.side, from: att.x, to: att.x, y: att.h + 80 });
+        }
+      }
+      if (r === 'hit' && d.lock === 'carry') {
+        vic.lockedBy = att.side + 1;
+        vic.lockH = vic.h;
+      }
+      // 잡아서 하늘로 — 붙잡은 순간 함께 뛰어오른다
+      if (r === 'hit' && d.hitVy > 0 && !att.airborne) {
+        att.vy = d.hitVy;
+        att.h = 0.01;
+        att.vx = att.facing * 1.5;
+      }
     }
 
     // 2) 투사체끼리 부딪치면 상쇄
@@ -224,14 +271,17 @@ export class HitboxManager {
           dir: p.otg ? Math.sign(vic.x - att.x) || att.facing : Math.sign(p.vx) || p.facing,
           dot: p.dot / p.totalHits,
           slow: p.slow,
-          drain: 0,
+          drain: p.drain,
           bounce: false,
+          freeze: p.freeze,
         },
         (p.x + hurt.cx) / 2,
         Math.min(p.y, hurt.cy + hurt.h / 3),
       );
       // 받아치기에 걸린 투사체는 사라진다
       if (r === 'parry') p.dead = true;
+      // 호문쿨루스 — 처음 닿으면 독구름으로 터진다
+      else if (p.explode) toCloud(p);
     }
   }
 
@@ -343,7 +393,8 @@ export class HitboxManager {
     // 피격
     const counter = vic.act === 'attack' && !!vd && vic.t <= vd.startup && vd.superLevel === 0;
     const scale = Math.max(0.3, 1 - 0.085 * vic.combo);
-    const raw = p.damage * scale * vic.def.stats.defense * (counter ? 1.2 : 1);
+    const buff = att.buffT > 0 ? 1.2 : 1;
+    const raw = p.damage * scale * vic.def.stats.defense * (counter ? 1.2 : 1) * buff;
     const dmg = Math.max(1, Math.round(raw));
     const dealt = Math.min(dmg, vic.hp);
     vic.hp -= dmg;
@@ -358,6 +409,10 @@ export class HitboxManager {
     if (p.drain > 0) att.hp = Math.min(att.maxHp, att.hp + Math.round(dealt * p.drain));
     if (p.dot > 0 && vic.hp > 0) vic.addDot(p.dot, p.fx);
     if (p.slow > 0) vic.slowT = Math.max(vic.slowT, p.slow);
+    if (p.freeze > 0) {
+      vic.frozenT = Math.max(vic.frozenT, p.freeze);
+      vic.frozenFx = p.fx;
+    }
     if (vic.hp <= 0 && p.superLevel > 0) att.superFinish = true;
 
     vic.move = null;

@@ -96,6 +96,7 @@ export function limb(
   w2: number,
   p: Paint,
   bulge = 0,
+  edge = true,
 ) {
   const r1 = w1 / 2;
   const r2 = w2 / 2;
@@ -150,16 +151,21 @@ export function limb(
     ctx.restore();
   }
 
-  // 외곽선
-  capsulePath(ctx, a, b, r1, r2);
-  ctx.lineWidth = 2.4 * LINE;
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = INK;
-  ctx.stroke();
-  if (bulge > 0) {
-    ctx.beginPath();
-    ctx.ellipse(mx, my, len * 0.34, (r1 + r2) / 2 + bulge, Math.atan2(uy, ux), 0, TAU);
+  // 외곽선 (limbInk 로 실루엣을 먼저 깔았으면 생략 — 관절 이음새가 안 보인다)
+  if (edge) {
+    capsulePath(ctx, a, b, r1, r2);
+    ctx.lineWidth = 2.4 * LINE;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = INK;
     ctx.stroke();
+  }
+  if (bulge > 0) {
+    if (edge) {
+      ctx.beginPath();
+      ctx.ellipse(mx, my, len * 0.34, (r1 + r2) / 2 + bulge, Math.atan2(uy, ux), 0, TAU);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = INK;
     // 근육 사이 선
     ctx.globalAlpha *= 0.5;
     ctx.lineWidth = 1.2;
@@ -168,6 +174,42 @@ export function limb(
     ctx.lineTo(mx + ux * len * 0.32, my + uy * len * 0.32);
     ctx.stroke();
     ctx.globalAlpha /= 0.5;
+  }
+}
+
+/**
+ * 팔다리 실루엣 외곽선 — 굵기만큼 큰 캡슐을 먼저 잉크색으로 깔아 둔다.
+ * 위팔 · 아래팔(허벅지 · 정강이)을 모두 깐 뒤 limb(..., edge=false) 로 칠하면
+ * 팔꿈치 · 무릎에서 외곽선이 겹쳐 보이지 않고 하나로 이어진 깔끔한 실루엣이 된다.
+ */
+export function limbInk(
+  ctx: CanvasRenderingContext2D,
+  a: V,
+  b: V,
+  w1: number,
+  w2: number,
+  bulge = 0,
+  color = INK,
+) {
+  const o = 2.4 * LINE;
+  ctx.fillStyle = color;
+  capsulePath(ctx, a, b, w1 / 2 + o / 2, w2 / 2 + o / 2);
+  ctx.fill();
+  if (bulge > 0) {
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const ux = (b[0] - a[0]) / (len || 1);
+    const uy = (b[1] - a[1]) / (len || 1);
+    ctx.beginPath();
+    ctx.ellipse(
+      (a[0] + b[0]) / 2 - ux * 2,
+      (a[1] + b[1]) / 2 - uy * 2,
+      len * 0.34 + o / 2,
+      (w1 + w2) / 4 + bulge + o / 2,
+      Math.atan2(uy, ux),
+      0,
+      TAU,
+    );
+    ctx.fill();
   }
 }
 

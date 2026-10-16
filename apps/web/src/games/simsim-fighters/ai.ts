@@ -159,11 +159,13 @@ export class AIController {
     // 초필살기 — 게이지가 있고 맞을 만한 거리
     if (me.meter >= SUPER_COST && !me.airborne) {
       const sup = me.meter >= ULT_COST ? m.ult : m.super;
-      const range = sup.projectile
-        ? sup.projectile.sky
-          ? 800
+      const sp = sup.projectile;
+      // 상대 자리에 생기거나 화면 전체를 덮는 기술은 어디서든 닿는다
+      const range = sp
+        ? sp.sky || sp.atOpp || sp.flank
+          ? 900
           : 600
-        : reachOf(sup) + sup.selfVx * sup.active * 0.6;
+        : reachOf(sup) + sup.selfVx * sup.active * 0.6 + sup.startVx * sup.startup;
       const opOpen = op.act === 'attack' || op.act === 'land' || op.act === 'jumpsquat';
       if (dist < range && (opOpen || r < 0.12)) return IN.F;
     }
