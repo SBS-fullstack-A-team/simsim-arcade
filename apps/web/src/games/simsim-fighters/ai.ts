@@ -27,7 +27,13 @@ const TUNING: readonly AiTuning[] = [
   { reaction: 6, block: 0.8, combo: 0.85, antiAir: 0.7, thinkGap: 11, burst: 0.42 },
 ];
 
-const reachOf = (d: MoveDef | null) => (d && d.box ? d.box.x + d.box.w / 2 : 0);
+/** 기술이 닿는 거리 — 판정 상자가 없으면 투사체가 날아가는 거리 */
+const reachOf = (d: MoveDef | null) => {
+  if (!d) return 0;
+  if (d.box) return d.box.x + d.box.w / 2;
+  if (d.projectile) return d.projectile.x + Math.abs(d.projectile.vx) * d.projectile.life;
+  return 0;
+};
 
 /**
  * AIController — 1인 플레이 스파링 상대.
@@ -95,6 +101,17 @@ export class AIController {
       if (this.judgedMove !== key) {
         this.judgedMove = key;
         this.judgedBlock = Math.random() < this.tune.block;
+      }
+      // 받아치기 캐릭터는 막는 대신 받아치기를 노리기도 한다
+      if (
+        this.judgedBlock &&
+        me.moves.sp2.parry &&
+        !me.airborne &&
+        (me.act === 'idle' || me.act === 'walk') &&
+        Math.random() < 0.35
+      ) {
+        this.judgedBlock = false;
+        return this.motion(fwd, IN.S);
       }
       if (this.judgedBlock) {
         this.guardLow = threat === 'low';
@@ -218,6 +235,8 @@ export class AIController {
   private comboFollowUp(me: Fighter, fwd: number): number {
     const d = me.moveDef;
     if (!d || me.t <= d.startup) return 0;
+    // 연계기가 있는 기술은 같은 버튼으로 바로 잇는다
+    if (d.chain && Math.random() < this.tune.combo * 0.6) return d.chain === 'A' ? IN.A : IN.S;
     if (Math.random() > this.tune.combo * 0.35) return 0;
     if (d.id === 'punch' || d.id === 'cPunch') {
       return Math.random() < 0.6 ? IN.S : IN.DOWN | IN.S;

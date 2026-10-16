@@ -47,6 +47,11 @@ export const DASH_CANCEL = 4;
 /** 백대시 시작 무적 프레임 */
 export const BACKDASH_INVUL = 5;
 
+/* ---------------- 상태 이상 ---------------- */
+/** 지속 피해(출혈 · 맹독)가 이어지는 프레임 · 깎이는 간격 */
+export const DOT_FRAMES = 180;
+export const DOT_TICK = 15;
+
 /* ---------------- 텐션(필살기) 게이지 ---------------- */
 export const METER_BAR = 100;
 export const METER_MAX = 300;
@@ -137,6 +142,8 @@ export const CONTROLS: readonly { keys: string; action: string }[] = [
 ];
 
 export const TIPS: readonly string[] = [
+  '캐릭터마다 고유 능력이 달라요 — 슈퍼아머 · 받아치기 · 연계 · 출혈 · 빙결 · 흡혈 · 공중 필살기',
+  '주황빛으로 빛나는 동안엔 슈퍼아머! 잡기나 초필살기로 끊어 내세요',
   '방향키를 빠르게 두 번 누르면 대시! 대시 중에도 바로 공격 · 가드할 수 있어요',
   '공중 공격은 서서 막고, 다리 걸기(↓+S)는 앉아서 막아야 해요',
   '막을 때마다 가드 게이지가 깎여요. 다 깎이면 가드 크래시!',

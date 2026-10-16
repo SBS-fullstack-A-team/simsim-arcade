@@ -480,8 +480,36 @@ export function drawProjectile(ctx: CanvasRenderingContext2D, p: Projectile, tim
   const k = Math.min(1, p.age / Math.max(1, p.delay));
   ctx.save();
   ctx.translate(x, y);
+  // 비스듬히 날아가는 탄환 · 레이저는 날아가는 방향으로 기울인다
+  if ((p.fx === 'bullet' || p.fx === 'light') && !p.sky && p.vy !== 0) {
+    ctx.rotate(Math.atan2(-p.vy, p.vx) - (p.vx < 0 ? Math.PI : 0));
+  }
   switch (p.fx) {
     case 'fire': {
+      if (p.vx === 0 && p.w > 100) {
+        // 착지 대폭발 — 땅에서 솟구치는 불꽃 돔
+        const g = ctx.createRadialGradient(0, p.h / 2, 4, 0, p.h / 2, p.w / 2);
+        g.addColorStop(0, 'rgba(255,255,230,0.95)');
+        g.addColorStop(0.3, light);
+        g.addColorStop(0.7, deep);
+        g.addColorStop(1, 'rgba(255,40,10,0)');
+        ctx.globalAlpha = Math.max(0, 1 - p.age / p.life) * 0.95;
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.ellipse(0, p.h / 2, p.w / 2, p.h, 0, Math.PI, TAU);
+        ctx.fill();
+        for (let i = 0; i < 7; i++) {
+          const a = Math.PI + (i + 0.5) * (Math.PI / 7);
+          const r = p.w / 2 + Math.sin(time * 30 + i) * 10;
+          ctx.strokeStyle = i % 2 ? light : '#fff6c0';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * r * 0.5, p.h / 2 + Math.sin(a) * p.h * 0.5);
+          ctx.lineTo(Math.cos(a) * r, p.h / 2 + Math.sin(a) * p.h);
+          ctx.stroke();
+        }
+        break;
+      }
       // 땅을 타고 가는 불기둥
       for (let i = 0; i < 6; i++) {
         const fy = p.h / 2 - i * (p.h / 6);
@@ -539,6 +567,19 @@ export function drawProjectile(ctx: CanvasRenderingContext2D, p: Projectile, tim
       break;
     }
     case 'sound': {
+      if (p.vx === 0) {
+        // 드롭 더 베이스 — 박자마다 퍼지는 원형 충격파
+        const fade = Math.max(0, 1 - p.age / p.life);
+        for (let i = 0; i < 3; i++) {
+          ctx.globalAlpha = fade * (0.9 - i * 0.25);
+          ctx.strokeStyle = i % 2 ? deep : light;
+          ctx.lineWidth = 7 - i * 2;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, Math.max(1, p.w / 2 - i * 14), Math.max(1, p.h / 2 - i * 8), 0, 0, TAU);
+          ctx.stroke();
+        }
+        break;
+      }
       ctx.scale(f, 1);
       ctx.lineWidth = 5;
       for (let i = 0; i < 4; i++) {

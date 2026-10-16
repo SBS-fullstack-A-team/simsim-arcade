@@ -6,7 +6,9 @@
  */
 import type { V } from './pose';
 
-export const INK = '#0e0812';
+export const INK = '#170e22';
+/** 외곽선 굵기 배율 — 조금 가늘게 해서 깔끔하게 */
+export const LINE = 0.82;
 export const TAU = Math.PI * 2;
 
 /** 빛 방향 (앞쪽 위) */
@@ -150,7 +152,7 @@ export function limb(
 
   // 외곽선
   capsulePath(ctx, a, b, r1, r2);
-  ctx.lineWidth = 2.4;
+  ctx.lineWidth = 2.4 * LINE;
   ctx.lineJoin = 'round';
   ctx.strokeStyle = INK;
   ctx.stroke();
@@ -197,7 +199,7 @@ export function fillStroke(
 ) {
   ctx.fillStyle = fill;
   ctx.fill();
-  ctx.lineWidth = width;
+  ctx.lineWidth = width * LINE;
   ctx.lineJoin = 'round';
   ctx.strokeStyle = INK;
   ctx.stroke();

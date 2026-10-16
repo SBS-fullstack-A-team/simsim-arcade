@@ -277,6 +277,99 @@ export const ATK: Record<AnimKey, [Pose, Pose]> = {
   ],
   super: [P({ hip: [0, -60], lean: 0.2, fHand: [10, 10], bHand: [-6, 12] }), POSE.superPose],
   burst: [POSE.burst, POSE.burst],
+  // 던지기 — 팔을 머리 뒤로 젖혔다가 앞으로 뿌린다
+  throw: [
+    P({
+      hip: [-6, -66],
+      lean: -0.22,
+      head: 0.05,
+      fHand: [-24, -34],
+      bHand: [22, 2],
+      fFoot: [26, 0],
+      bFoot: [-24, 0],
+    }),
+    P({
+      hip: [8, -62],
+      lean: 0.32,
+      fHand: [52, -8],
+      bHand: [-18, 16],
+      fFoot: [30, 0],
+      bFoot: [-28, -3],
+    }),
+  ],
+  // 회전 — 팔을 크게 벌리고 제자리에서 돈다 (지속 중 좌우로 휘돈다)
+  spin: [
+    P({ hip: [0, -60], lean: 0.25, fHand: [8, 14], bHand: [-6, 14] }),
+    P({
+      hip: [0, -58],
+      lean: 0.12,
+      head: -0.05,
+      fHand: [46, -6],
+      bHand: [-38, -6],
+      fFoot: [30, 0],
+      bFoot: [-30, 0],
+    }),
+  ],
+  // 받아치기 — 낮게 자세를 잡고 칼끝을 앞으로
+  parry: [
+    P({ hip: [-4, -58], lean: 0.18, fHand: [18, 8], bHand: [12, 10], fFoot: [26, 0] }),
+    P({
+      hip: [-6, -54],
+      lean: 0.24,
+      head: 0.12,
+      fHand: [26, 2],
+      bHand: [16, 6],
+      fFoot: [30, 0],
+      bFoot: [-30, 0],
+      weapon: -0.5,
+    }),
+  ],
+  // 공중제비 차기 — 몸을 뒤로 젖히며 발끝을 머리 위로
+  flip: [
+    P({
+      hip: [0, -48],
+      lean: 0.3,
+      fHand: [14, 20],
+      bHand: [6, 20],
+      fFoot: [22, 0],
+      bFoot: [-20, 0],
+    }),
+    P({
+      hip: [0, -80],
+      lean: -0.9,
+      head: -0.35,
+      fHand: [-22, 12],
+      bHand: [-30, 6],
+      fFoot: [44, -112],
+      bFoot: [-6, -34],
+      spin: -0.5,
+    }),
+  ],
+  // 조준 사격 — 팔을 곧게 뻗고 반동으로 살짝 젖힌다
+  shoot: [
+    P({ hip: [-2, -66], lean: 0, fHand: [34, -16], bHand: [28, -12] }),
+    P({
+      hip: [-4, -66],
+      lean: -0.06,
+      head: -0.04,
+      fHand: [54, -14],
+      bHand: [46, -10],
+      fFoot: [22, 0],
+      bFoot: [-26, 0],
+    }),
+  ],
+  // 짓밟기 — 무릎을 높이 들었다가 내리찍는다
+  stomp: [
+    P({ hip: [0, -74], lean: -0.06, fFoot: [24, -46], fHand: [22, -16], bHand: [-10, -10] }),
+    P({
+      hip: [6, -56],
+      lean: 0.28,
+      fFoot: [40, 0],
+      bFoot: [-26, 0],
+      fHand: [30, 12],
+      bHand: [-22, 8],
+    }),
+  ],
 };
 
 const BLADES: readonly WeaponKind[] = [
@@ -531,8 +624,17 @@ export function poseFor(f: Fighter, time: number): Pose {
         // 타격 — 뻗은 자세에서 몸이 조금 더 따라 들어간다 (팔로 스루)
         const k = (t - d.startup) / Math.max(1, d.active);
         pose = { ...pair[1], lean: pair[1].lean + Math.sin(k * Math.PI) * 0.05 };
-        // 다단히트는 연타하듯 흔든다
-        if (d.hits > 2) {
+        if (d.anim === 'spin') {
+          // 몸이 도는 것처럼 앞팔 · 뒷팔이 번갈아 앞으로 나온다
+          const c = Math.cos(t * 0.9);
+          pose = {
+            ...pose,
+            fHand: [42 * c, -6 + Math.sin(t * 0.9) * 4],
+            bHand: [-38 * c, -6],
+            lean: 0.04 * c,
+          };
+        } else if (d.hits > 2) {
+          // 다단히트는 연타하듯 흔든다
           const w = Math.sin(t * 1.5) * 10;
           pose = {
             ...pose,
@@ -546,6 +648,13 @@ export function poseFor(f: Fighter, time: number): Pose {
         pose = lerpPose(pair[1], base, smooth((k - 0.12) / 0.88));
       }
       if (d.anim === 'upper' && f.airborne) pose = { ...pose, spin: Math.min(0.3, f.t * 0.02) };
+      // 공중제비 — 떠 있는 동안 한 바퀴 뒤로 돈다
+      if (d.anim === 'flip' && f.airborne) {
+        const turn = Math.min(1, Math.max(0, (t - d.startup) / 22));
+        pose = { ...pose, spin: -smooth(turn) * Math.PI * 2 };
+      } else if (d.anim === 'flip') {
+        pose = { ...pose, spin: 0 };
+      }
       return pose;
     }
     default:
