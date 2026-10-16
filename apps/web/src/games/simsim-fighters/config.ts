@@ -30,8 +30,22 @@ export const FIGHT_CALL_FRAME = 64;
 export const KO_FRAMES = 176;
 
 export const GRAVITY = 0.66;
-export const JUMP_SQUAT = 4;
-export const LAND_LAG = 4;
+export const JUMP_SQUAT = 3;
+export const LAND_LAG = 3;
+/** 걷기 속도 배율 (앞 · 뒤) */
+export const WALK_FWD = 1.18;
+export const WALK_BACK = 0.95;
+
+/* ---------------- 대시 (같은 방향키 두 번 연타) ---------------- */
+/** 첫 번째 탭 뒤 두 번째 탭을 기다리는 프레임 */
+export const DASH_WINDOW = 12;
+/** 앞 대시 · 백대시 길이 (프레임) */
+export const DASH_FRAMES = 16;
+export const BACKDASH_FRAMES = 15;
+/** 이 프레임부터 대시를 공격 · 점프로 캔슬할 수 있다 (가드는 언제든) */
+export const DASH_CANCEL = 4;
+/** 백대시 시작 무적 프레임 */
+export const BACKDASH_INVUL = 5;
 
 /* ---------------- 텐션(필살기) 게이지 ---------------- */
 export const METER_BAR = 100;
@@ -110,6 +124,7 @@ export const stageMultiplier = (stage: number) => 1 + 0.25 * (stage - 1);
 
 export const CONTROLS: readonly { keys: string; action: string }[] = [
   { keys: '← →', action: '이동 (뒤로 걸으며 거리 조절)' },
+  { keys: '→→ / ←←', action: '대시 · 백대시 (같은 방향키 빠르게 두 번)' },
   { keys: '↑', action: '점프 (←/→ 와 함께 대각선)' },
   { keys: '↓', action: '숙이기' },
   { keys: 'A', action: '주먹 — 빠른 약공격, 발차기·필살기로 캔슬' },
@@ -122,6 +137,7 @@ export const CONTROLS: readonly { keys: string; action: string }[] = [
 ];
 
 export const TIPS: readonly string[] = [
+  '방향키를 빠르게 두 번 누르면 대시! 대시 중에도 바로 공격 · 가드할 수 있어요',
   '공중 공격은 서서 막고, 다리 걸기(↓+S)는 앉아서 막아야 해요',
   '막을 때마다 가드 게이지가 깎여요. 다 깎이면 가드 크래시!',
   '주먹 → 발차기 → 필살기 → 초필살기 순서로 캔슬하면 콤보가 이어져요',

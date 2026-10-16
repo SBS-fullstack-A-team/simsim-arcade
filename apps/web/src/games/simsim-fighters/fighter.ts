@@ -1,5 +1,10 @@
 import {
+  BACKDASH_FRAMES,
+  BACKDASH_INVUL,
   BURST_COST,
+  DASH_CANCEL,
+  DASH_FRAMES,
+  DASH_WINDOW,
   GETUP_FRAMES,
   GRAVITY,
   GUARD_MAX,
@@ -11,6 +16,8 @@ import {
   METER_MAX,
   SUPER_COST,
   ULT_COST,
+  WALK_BACK,
+  WALK_FWD,
 } from './config';
 import {
   CharacterRegistry,
@@ -26,6 +33,7 @@ import {
 export type Act =
   | 'idle'
   | 'walk'
+  | 'dash'
   | 'crouch'
   | 'jumpsquat'
   | 'air'
@@ -59,6 +67,7 @@ export interface FighterWorld {
 export type SimEvent =
   | { type: 'jump'; side: 0 | 1; x: number }
   | { type: 'land'; side: 0 | 1; x: number }
+  | { type: 'dash'; side: 0 | 1; x: number; dir: number }
   | { type: 'swing'; side: 0 | 1; move: MoveId; x: number; y: number }
   | { type: 'teleport'; side: 0 | 1; from: number; to: number; y: number }
   | { type: 'burst'; side: 0 | 1; x: number; y: number }
@@ -155,6 +164,11 @@ export class Fighter {
   bufA = 0;
   bufS = 0;
   bufF = 0;
+  /** 대시 — 첫 탭 방향(화면 기준 -1 왼쪽 / 1 오른쪽) · 두 번째 탭을 기다리는 남은 프레임 · 대시 선입력 */
+  tapDir = 0;
+  tapT = 0;
+  bufDash = 0;
+  bufDashDir = 0;
   /** 맞은 순간 하얗게 번쩍이는 연출용 */
   flash = 0;
   stats: FighterStats = { damage: 0, maxCombo: 0, supers: 0, bursts: 0, blocks: 0 };
@@ -228,6 +242,9 @@ export class Fighter {
     this.bufA = 0;
     this.bufS = 0;
     this.bufF = 0;
+    this.tapDir = 0;
+    this.tapT = 0;
+    this.bufDash = 0;
     this.motion = [];
     this.flash = 0;
   }
@@ -247,6 +264,21 @@ export class Fighter {
       if (this.bufA > 0) this.bufA--;
       if (this.bufS > 0) this.bufS--;
       if (this.bufF > 0) this.bufF--;
+      if (this.tapT > 0) this.tapT--;
+      if (this.bufDash > 0) this.bufDash--;
+    }
+    // 같은 방향키 두 번 연타 → 대시 (위 · 아래를 함께 누르고 있으면 대시가 아니다)
+    const tap = pressed & (IN.LEFT | IN.RIGHT);
+    if (tap && tap !== (IN.LEFT | IN.RIGHT) && !(bits & (IN.UP | IN.DOWN))) {
+      const dir = tap & IN.RIGHT ? 1 : -1;
+      if (this.tapT > 0 && this.tapDir === dir) {
+        this.bufDash = 6;
+        this.bufDashDir = dir;
+        this.tapT = 0;
+      } else {
+        this.tapDir = dir;
+        this.tapT = DASH_WINDOW;
+      }
     }
     if (pressed & IN.A) this.bufA = 7;
     if (pressed & IN.S) this.bufS = 7;
@@ -352,7 +384,10 @@ export class Fighter {
 
   startMove(id: MoveId, world: FighterWorld) {
     const d = this.moves[id];
-    if (!this.airborne && !d.air) this.vx = 0;
+    // 앞 대시에서 바로 낸 공격은 관성이 조금 남아 미끄러지듯 들어간다
+    const dashMomentum = this.act === 'dash' && this.walkDir > 0;
+    if (!this.airborne && !d.air) this.vx = dashMomentum ? this.vx * 0.55 : 0;
+    this.bufDash = 0;
     this.move = id;
     this.setAct('attack');
     this.moveHits = 0;
@@ -412,6 +447,21 @@ export class Fighter {
       case 'land':
         if (this.t >= this.landLag) this.setAct('idle');
         break;
+      case 'dash': {
+        // 앞 대시: 처음엔 힘껏 박차고 끝으로 갈수록 감속 · 백대시: 짧게 뒤로 뛰었다가 착지
+        const s = this.def.stats;
+        const fwd = this.walkDir > 0;
+        const len = fwd ? DASH_FRAMES : BACKDASH_FRAMES;
+        const k = this.t / len;
+        const top = fwd ? 6.2 + s.walk * 1.15 : 5.4 + s.walk * 0.9;
+        const speed = top * (k < 0.55 ? 1 : Math.max(0, 1 - (k - 0.55) / 0.45) ** 1.4);
+        this.vx = this.facing * this.walkDir * speed;
+        if (this.t >= len) {
+          this.vx = 0;
+          this.toNeutral();
+        }
+        break;
+      }
       case 'jumpsquat':
         if (this.t >= JUMP_SQUAT) {
           const s = this.def.stats;
@@ -497,11 +547,19 @@ export class Fighter {
   private decide(world: FighterWorld) {
     const bits = this.held;
     const grounded = !this.airborne;
+    const dashing = this.act === 'dash';
+    // 대시는 몇 프레임 뒤부터 공격 · 필살기 · 점프로 캔슬된다
+    const dashFree = dashing && this.t >= DASH_CANCEL;
     const neutral =
       grounded &&
-      (this.act === 'idle' || this.act === 'walk' || this.act === 'crouch' || this.act === 'guard');
+      (this.act === 'idle' ||
+        this.act === 'walk' ||
+        this.act === 'crouch' ||
+        this.act === 'guard' ||
+        dashFree);
     const airFree = this.act === 'air' && !this.move;
-    const guardable = neutral || this.act === 'blockstun' || this.act === 'land' || airFree;
+    const guardable =
+      neutral || dashing || this.act === 'blockstun' || this.act === 'land' || airFree;
     this.guarding = (bits & IN.D) !== 0 && guardable;
     this.guardLow = this.guarding && (bits & IN.DOWN) !== 0 && grounded;
 
@@ -571,9 +629,9 @@ export class Fighter {
       }
     }
 
-    if (!neutral) return;
+    if (!neutral && !(dashing && grounded)) return;
 
-    // 가드
+    // 가드 — 대시 중에도 바로 막을 수 있다
     if (this.guarding) {
       if (this.act !== 'guard') this.setAct('guard');
       this.vx = 0;
@@ -583,6 +641,26 @@ export class Fighter {
     const fwd = this.facing > 0 ? IN.RIGHT : IN.LEFT;
     const back = this.facing > 0 ? IN.LEFT : IN.RIGHT;
     const dir = bits & fwd ? 1 : bits & back ? -1 : 0;
+
+    if (dashing) {
+      // 대시 점프 캔슬
+      if (dashFree && bits & IN.UP) {
+        this.jumpDir = dir;
+        this.vx = 0;
+        this.setAct('jumpsquat');
+      }
+      return;
+    }
+
+    // 대시 (→→ / ←←)
+    if (this.bufDash > 0 && !(bits & IN.DOWN)) {
+      this.walkDir = this.bufDashDir * this.facing > 0 ? 1 : -1;
+      this.bufDash = 0;
+      this.setAct('dash');
+      if (this.walkDir < 0) this.invul = Math.max(this.invul, BACKDASH_INVUL);
+      world.emit({ type: 'dash', side: this.side, x: this.x, dir: this.walkDir });
+      return;
+    }
 
     if (bits & IN.UP) {
       this.jumpDir = dir;
@@ -599,7 +677,7 @@ export class Fighter {
       const s = this.def.stats;
       if (this.act !== 'walk' || this.walkDir !== dir) this.setAct('walk');
       this.walkDir = dir;
-      this.vx = this.facing * (dir > 0 ? s.walk : -s.walk * 0.8);
+      this.vx = this.facing * (dir > 0 ? s.walk * WALK_FWD : -s.walk * 0.8 * WALK_BACK);
       return;
     }
     if (this.act !== 'idle') this.setAct('idle');

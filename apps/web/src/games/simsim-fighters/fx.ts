@@ -156,6 +156,23 @@ export class FxSystem {
     }
   }
 
+  /** 대시 바람 줄기 — 몸 높이에 가로로 길게 스치는 선 */
+  streaks(x: number, y: number, color: string, dir: number) {
+    for (let i = 0; i < 4; i++) {
+      this.add({
+        kind: 'spark',
+        x: x + dir * (6 + i * 10),
+        y: y - 26 - i * 30,
+        vx: dir * (480 + i * 70),
+        vy: 0,
+        color,
+        life: 0.15 + i * 0.02,
+        size: 28,
+        width: 2.4,
+      });
+    }
+  }
+
   shards(x: number, y: number, color: string, n: number, speed: number) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * TAU;

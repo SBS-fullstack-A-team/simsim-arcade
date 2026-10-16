@@ -185,6 +185,16 @@ export class AIController {
       return IN.UP | fwd;
     }
 
+    // 대시 — 멀면 앞 대시로 파고들고, 원거리 캐릭터는 붙으면 백대시로 빠진다 (→ 떼고 → 두 번 탭)
+    if (dist > prefer + 150 && r < 0.4) {
+      this.queue = [0, fwd, fwd, fwd, fwd, fwd, fwd];
+      return fwd;
+    }
+    if (zoner && dist < prefer - 160 && r > 0.6) {
+      this.queue = [0, back];
+      return back;
+    }
+
     // 거리 조절
     if (dist > prefer + 40) {
       this.hold = fwd;
