@@ -637,6 +637,12 @@ export default function SimsimFighters({ onFinish }: GameProps) {
                   <dd>{selected.sp1.name}</dd>
                   <dt>↓→ + S</dt>
                   <dd>{selected.sp2.name}</dd>
+                  {selected.followup && (
+                    <>
+                      <dt>연계</dt>
+                      <dd>{selected.followup.name}</dd>
+                    </>
+                  )}
                   <dt>F</dt>
                   <dd>{selected.superArt.name}</dd>
                 </dl>

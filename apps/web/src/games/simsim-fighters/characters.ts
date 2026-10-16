@@ -43,7 +43,13 @@ export type AnimKey =
   | 'slash'
   | 'grab'
   | 'super'
-  | 'burst';
+  | 'burst'
+  | 'throw'
+  | 'spin'
+  | 'parry'
+  | 'flip'
+  | 'shoot'
+  | 'stomp';
 
 export type MoveId =
   | 'punch'
@@ -56,7 +62,8 @@ export type MoveId =
   | 'sp2'
   | 'super'
   | 'ult'
-  | 'burst';
+  | 'burst'
+  | 'ex';
 
 /** 판정 상자 — x: 바라보는 쪽으로 중심까지 거리, y: 땅에서 중심까지 높이 */
 export interface Box {
@@ -104,6 +111,16 @@ export interface ProjSpec {
   linger: number;
   /** 상대 높이를 따라가는 정도 */
   homing: number;
+  /** 부메랑 — 수명 절반에 멈췄다가 주인 쪽으로 되돌아온다 */
+  boomerang: boolean;
+  /** 위아래로 출렁이며 날아가는 폭 (음파) */
+  wave: number;
+  /** 매 프레임 커지는 폭 · 높이 (화염파 · 충격파) */
+  growW: number;
+  growH: number;
+  /** 맞으면 지속 피해 (총량) · 둔화 프레임 */
+  dot: number;
+  slow: number;
 }
 
 export interface MoveDef {
@@ -149,7 +166,32 @@ export interface MoveDef {
   air: boolean;
   /** 1: 초필살기 · 3: 버스트 얼티밋 */
   superLevel: 0 | 1 | 3;
+  /** 슈퍼아머 — 발생 ~ 지속 동안 이 타수까지는 맞아도 멈추지 않는다 (피해는 절반) */
+  armor: number;
+  /** 받아치기 자세 — 지속 동안 공격을 받으면 흘리고 연계기(ex)로 반격 */
+  parry: boolean;
+  /** 맞히면 이 버튼으로 연계기(ex)가 이어진다 */
+  chain: '' | 'A' | 'S';
+  /** 준 피해의 이 비율만큼 체력 회복 (흡혈) */
+  drain: number;
+  /** 맞으면 지속 피해 (총량, 3초 동안 나눠서) */
+  dot: number;
+  /** 맞으면 이 프레임 동안 둔화 (걷기 · 점프 · 대시가 느려진다) */
+  slow: number;
+  /** 다운될 때 바닥에서 한 번 튀어 올라 추가타를 넣을 수 있다 */
+  bounce: boolean;
+  /** 발생 동안 앞으로 미끄러지는 속도 (구르기 · 돌격 준비) */
+  startVx: number;
+  /** 지속 동안 상대 몸을 통과한다 (등 뒤로 빠지는 돌진) */
+  passThrough: boolean;
+  /** 공중에서도 쓸 수 있는 필살기 (투사체는 비스듬히 아래로) */
+  airOk: boolean;
+  /** 다이브가 착지하는 순간 생기는 투사체 (충격파 · 폭발) */
+  landProj: ProjSpec | null;
 }
+
+export type NormalId = 'punch' | 'kick' | 'cPunch' | 'cKick' | 'aPunch' | 'aKick';
+type MoveSpec = Partial<MoveDef> & Pick<MoveDef, 'name' | 'anim'>;
 
 export type HairStyle =
   | 'spiky'
@@ -265,9 +307,13 @@ export interface CharacterDef {
   weapon: WeaponKind;
   back: BackKind;
   stats: CharStats;
-  sp1: Partial<MoveDef> & Pick<MoveDef, 'name' | 'anim'>;
-  sp2: Partial<MoveDef> & Pick<MoveDef, 'name' | 'anim'>;
-  superArt: Partial<MoveDef> & Pick<MoveDef, 'name' | 'anim'>;
+  sp1: MoveSpec;
+  sp2: MoveSpec;
+  superArt: MoveSpec;
+  /** 연계기 — 연타 연계(chain) 의 2단 · 받아치기(parry) 성공 시 반격 */
+  followup?: MoveSpec;
+  /** 캐릭터 고유 기본기 (이름 · 동작 · 판정 덮어쓰기) */
+  normals?: Partial<Record<NormalId, Partial<MoveDef>>>;
   quote: string;
 }
 
@@ -306,6 +352,17 @@ const BASE_MOVE: MoveDef = {
   untilLand: false,
   air: false,
   superLevel: 0,
+  armor: 0,
+  parry: false,
+  chain: '',
+  drain: 0,
+  dot: 0,
+  slow: 0,
+  bounce: false,
+  startVx: 0,
+  passThrough: false,
+  airOk: false,
+  landProj: null,
 };
 
 const BASE_PROJ: ProjSpec = {
@@ -337,6 +394,12 @@ const BASE_PROJ: ProjSpec = {
   delay: 0,
   linger: 0,
   homing: 0,
+  boomerang: false,
+  wave: 0,
+  growW: 0,
+  growH: 0,
+  dot: 0,
+  slow: 0,
 };
 
 const proj = (o: Partial<ProjSpec>): ProjSpec => ({ ...BASE_PROJ, ...o });
@@ -352,7 +415,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'SOLARIS',
     gender: 'M',
     title: '대검에 태양의 불꽃을 두른 떠돌이 전사',
-    style: '밸런스 · 파워',
+    style: '대검 · 화염 폭발',
     color: '#ff5a1f',
     glow: '#ffc04a',
     fx: 'fire',
@@ -381,8 +444,14 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1.2,
       defense: 1,
     },
+    normals: {
+      punch: { name: '대검 가로베기', damage: 46, box: { x: 64, y: 110, w: 78, h: 40 } },
+      kick: { name: '화염 앞차기', fx: 'fire', damage: 74 },
+      cKick: { name: '대검 쓸기', damage: 66, box: { x: 78, y: 16, w: 104, h: 30 } },
+      aKick: { name: '불꽃 내려찍기', damage: 70, box: { x: 46, y: 30, w: 80, h: 56 } },
+    },
     sp1: {
-      name: '건 플레임',
+      name: '솔라 웨이브',
       anim: 'slash',
       fx: 'fire',
       startup: 13,
@@ -390,15 +459,18 @@ const CHARACTERS: readonly CharacterDef[] = [
       recovery: 24,
       projectile: proj({
         fx: 'fire',
-        x: 60,
-        y: 46,
-        vx: 7,
-        w: 48,
-        h: 92,
-        life: 72,
-        damage: 85,
+        x: 64,
+        y: 34,
+        vx: 6.5,
+        w: 34,
+        h: 54,
+        growW: 0.3,
+        growH: 1.1,
+        life: 74,
+        damage: 96,
+        hits: 2,
+        interval: 12,
         hitstun: 22,
-        knockdown: false,
       }),
     },
     sp2: {
@@ -408,7 +480,9 @@ const CHARACTERS: readonly CharacterDef[] = [
       startup: 4,
       active: 12,
       recovery: 26,
-      damage: 110,
+      damage: 120,
+      hits: 3,
+      interval: 4,
       invul: 9,
       selfVy: 13,
       selfVx: 3,
@@ -417,18 +491,38 @@ const CHARACTERS: readonly CharacterDef[] = [
       box: { x: 34, y: 130, w: 70, h: 130 },
     },
     superArt: {
-      name: '타이런트 블레이즈',
-      anim: 'rush',
+      name: '선폴 디바인',
+      anim: 'dive',
       fx: 'fire',
       startup: 8,
-      active: 28,
-      recovery: 28,
-      damage: 300,
-      hits: 7,
-      interval: 4,
-      selfVx: 13,
-      knockdown: true,
-      box: { x: 50, y: 85, w: 90, h: 130 },
+      active: 40,
+      recovery: 26,
+      damage: 110,
+      selfVy: 15,
+      selfVx: 6.5,
+      untilLand: true,
+      // 내리찍기에 맞으면 그 자리에 묶여 착지 폭발까지 맞는다
+      hitstun: 44,
+      push: 0,
+      level: 'overhead',
+      box: { x: 30, y: 30, w: 100, h: 100 },
+      landProj: proj({
+        fx: 'fire',
+        x: 0,
+        y: 64,
+        vx: 0,
+        w: 150,
+        h: 130,
+        growW: 7,
+        growH: 0.6,
+        life: 24,
+        damage: 230,
+        hits: 3,
+        interval: 5,
+        pierce: true,
+        knockdown: true,
+        launch: 12,
+      }),
     },
     quote: '불꽃은 꺼지지 않는다. 다음 상대를 데려와라.',
   },
@@ -438,7 +532,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'SHADOW CROW',
     gender: 'M',
     title: '그림자 사슬과 대낫으로 영혼을 거두는 사신',
-    style: '긴 리치 · 견제',
+    style: '긴 리치 · 흡혈 · 순간이동',
     color: '#7a4cff',
     glow: '#c0a0ff',
     fx: 'shadow',
@@ -467,16 +561,22 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1.4,
       defense: 1,
     },
+    normals: {
+      punch: { name: '낫 걸기', damage: 40 },
+      kick: { name: '그림자 무릎', fx: 'shadow' },
+      cKick: { name: '사신의 낫 쓸기', damage: 66, box: { x: 96, y: 16, w: 130, h: 30 } },
+    },
     sp1: {
       name: '그림자 사슬',
-      anim: 'beam',
+      anim: 'throw',
       fx: 'shadow',
       startup: 14,
       active: 6,
       recovery: 24,
       damage: 75,
-      push: -9,
-      hitstun: 26,
+      push: -11,
+      hitstun: 30,
+      slow: 90,
       box: { x: 180, y: 92, w: 300, h: 30 },
     },
     sp2: {
@@ -493,17 +593,19 @@ const CHARACTERS: readonly CharacterDef[] = [
       box: { x: 50, y: 90, w: 100, h: 140 },
     },
     superArt: {
-      name: '데스 하베스트',
-      anim: 'slash',
+      name: '소울 하베스트',
+      anim: 'spin',
       fx: 'shadow',
       startup: 9,
-      active: 26,
+      active: 28,
       recovery: 30,
-      damage: 290,
-      hits: 6,
+      damage: 300,
+      hits: 7,
       interval: 4,
+      drain: 0.6,
+      push: -3,
       knockdown: true,
-      box: { x: 230, y: 90, w: 460, h: 170 },
+      box: { x: 0, y: 90, w: 330, h: 180 },
     },
     quote: '네 영혼은… 내 낫에 걸리기엔 너무 가볍군.',
   },
@@ -513,7 +615,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'BOLT MASTER',
     gender: 'M',
     title: '온몸에 뇌격을 두른 사이버펑크 격투가',
-    style: '스피드 · 러시',
+    style: '러시 · 연계 · 관통 돌진',
     color: '#28e0ff',
     glow: '#fff36a',
     fx: 'volt',
@@ -542,36 +644,53 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1,
       defense: 1,
     },
-    sp1: {
-      name: '플라즈마 볼',
-      anim: 'cast',
-      fx: 'volt',
-      startup: 11,
-      active: 2,
-      recovery: 22,
-      projectile: proj({
-        fx: 'volt',
-        y: 100,
-        vx: 11,
-        w: 38,
-        h: 38,
-        damage: 70,
-        hits: 2,
-        interval: 5,
-      }),
+    normals: {
+      punch: { name: '원투 잽', hits: 2, interval: 3, damage: 44 },
+      kick: { name: '볼트 니킥', startVx: 3.5, damage: 68 },
+      aPunch: { name: '전격 팔꿈치', fx: 'volt' },
     },
-    sp2: {
-      name: '볼트 대시',
+    sp1: {
+      name: '볼트 스트레이트',
       anim: 'rush',
       fx: 'volt',
       startup: 7,
-      active: 14,
-      recovery: 22,
-      damage: 100,
-      hits: 3,
+      active: 6,
+      recovery: 20,
+      damage: 72,
+      selfVx: 10,
+      chain: 'A',
+      box: { x: 42, y: 100, w: 70, h: 60 },
+    },
+    followup: {
+      name: '썬더 어퍼 (A 연타)',
+      anim: 'upper',
+      fx: 'volt',
+      startup: 3,
+      active: 8,
+      recovery: 20,
+      damage: 84,
+      hits: 2,
       interval: 4,
-      selfVx: 11,
-      box: { x: 40, y: 95, w: 70, h: 90 },
+      selfVy: 10,
+      selfVx: 4,
+      startVx: 8,
+      launch: 13,
+      knockdown: true,
+      box: { x: 50, y: 120, w: 96, h: 130 },
+    },
+    sp2: {
+      name: '라이트닝 블링크',
+      anim: 'rush',
+      fx: 'volt',
+      startup: 5,
+      active: 10,
+      recovery: 16,
+      damage: 70,
+      selfVx: 21,
+      invul: 13,
+      passThrough: true,
+      hitstun: 24,
+      box: { x: 0, y: 90, w: 60, h: 120 },
     },
     superArt: {
       name: '썬더 스톰',
@@ -607,7 +726,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'IRON GIANT',
     gender: 'M',
     title: '묵직한 중장갑으로 상대를 붙잡아 내리꽂는 거대 로봇',
-    style: '잡기 · 맷집',
+    style: '슈퍼아머 · 잡기 · 맷집',
     color: '#9aa4b0',
     glow: '#ff8a2a',
     fx: 'steel',
@@ -636,6 +755,11 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1.15,
       defense: 0.85,
     },
+    normals: {
+      punch: { name: '해머 훅', damage: 52 },
+      kick: { name: '철갑 짓밟기', anim: 'stomp', armor: 1, damage: 84 },
+      cKick: { name: '진각 쓸기', damage: 72 },
+    },
     sp1: {
       name: '로켓 펀치',
       anim: 'punch',
@@ -643,6 +767,7 @@ const CHARACTERS: readonly CharacterDef[] = [
       startup: 16,
       active: 2,
       recovery: 28,
+      armor: 1,
       projectile: proj({
         fx: 'steel',
         y: 105,
@@ -666,17 +791,20 @@ const CHARACTERS: readonly CharacterDef[] = [
       level: 'unblockable',
       knockdown: true,
       launch: 9,
+      bounce: true,
       hitstop: 14,
       box: { x: 60, y: 90, w: 96, h: 150 },
     },
     superArt: {
-      name: '타이탄 프레스',
+      name: '타이탄 차지',
       anim: 'grab',
       fx: 'steel',
-      startup: 6,
+      startup: 14,
       active: 4,
       recovery: 36,
-      damage: 380,
+      damage: 390,
+      startVx: 9,
+      armor: 4,
       grab: true,
       level: 'unblockable',
       knockdown: true,
@@ -692,7 +820,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'PHANTOM DJ',
     gender: 'M',
     title: '음파 레이저와 비트로 무대를 지배하는 댄서',
-    style: '견제 · 다단히트',
+    style: '음파 · 리듬 · 브레이크댄스',
     color: '#ff3ad8',
     glow: '#3affd0',
     fx: 'sound',
@@ -721,22 +849,36 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1.05,
       defense: 1,
     },
+    normals: {
+      punch: { name: '비트 잽', damage: 36 },
+      kick: { name: '윈드밀 킥', anim: 'spin', hits: 2, interval: 4, damage: 72 },
+      cKick: { name: '헤드스핀 스윕', damage: 60 },
+    },
     sp1: {
-      name: '사운드 레이저',
-      anim: 'beam',
+      name: '사운드 웨이브',
+      anim: 'cast',
       fx: 'sound',
-      startup: 15,
-      active: 16,
+      startup: 12,
+      active: 2,
       recovery: 22,
-      damage: 90,
-      hits: 4,
-      interval: 4,
-      hitstun: 16,
-      box: { x: 230, y: 100, w: 400, h: 28 },
+      projectile: proj({
+        fx: 'sound',
+        x: 50,
+        y: 96,
+        vx: 7,
+        w: 46,
+        h: 56,
+        wave: 30,
+        life: 110,
+        damage: 84,
+        hits: 3,
+        interval: 8,
+        hitstun: 16,
+      }),
     },
     sp2: {
       name: '비트 스핀',
-      anim: 'rush',
+      anim: 'spin',
       fx: 'sound',
       startup: 7,
       active: 22,
@@ -744,30 +886,33 @@ const CHARACTERS: readonly CharacterDef[] = [
       damage: 96,
       hits: 4,
       interval: 5,
-      selfVx: 6,
-      box: { x: 20, y: 80, w: 110, h: 110 },
+      selfVx: 5,
+      level: 'low',
+      box: { x: 10, y: 40, w: 140, h: 80 },
     },
     superArt: {
       name: '드롭 더 베이스',
       anim: 'super',
       fx: 'sound',
       startup: 10,
-      active: 4,
-      recovery: 34,
+      active: 50,
+      recovery: 30,
       projectile: proj({
         fx: 'sound',
-        x: 70,
-        y: 70,
-        vx: 9,
-        w: 150,
-        h: 140,
-        life: 90,
-        damage: 300,
-        hits: 5,
-        interval: 5,
+        x: 0,
+        y: 90,
+        vx: 0,
+        w: 60,
+        h: 70,
+        growW: 11,
+        growH: 3.6,
+        life: 34,
+        damage: 80,
+        count: 4,
+        gap: 14,
         pierce: true,
+        launch: 7,
         knockdown: true,
-        launch: 10,
       }),
     },
     quote: '비트에 못 따라오면 무대에서 내려가야지. 다음 곡!',
@@ -778,7 +923,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'BLOOD HOUND',
     gender: 'M',
     title: '양손 리트랙터블 클로를 휘두르는 광기의 기사',
-    style: '돌진 · 압박',
+    style: '출혈 · 돌진 · 압박',
     color: '#e0203a',
     glow: '#ff8a9a',
     fx: 'blood',
@@ -807,6 +952,11 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 0.95,
       defense: 1,
     },
+    normals: {
+      punch: { name: '클로 스와이프', hits: 2, interval: 3, damage: 42, dot: 12 },
+      kick: { name: '하운드 킥' },
+      cPunch: { name: '발톱 할퀴기', dot: 10 },
+    },
     sp1: {
       name: '클로 렌드',
       anim: 'rush',
@@ -818,6 +968,7 @@ const CHARACTERS: readonly CharacterDef[] = [
       hits: 2,
       interval: 5,
       selfVx: 13,
+      dot: 60,
       box: { x: 46, y: 95, w: 70, h: 90 },
     },
     sp2: {
@@ -833,6 +984,7 @@ const CHARACTERS: readonly CharacterDef[] = [
       untilLand: true,
       level: 'overhead',
       knockdown: true,
+      dot: 40,
       box: { x: 30, y: 40, w: 80, h: 70 },
     },
     superArt: {
@@ -842,11 +994,13 @@ const CHARACTERS: readonly CharacterDef[] = [
       startup: 7,
       active: 30,
       recovery: 28,
-      damage: 310,
+      damage: 300,
       hits: 9,
       interval: 3,
       selfVx: 12,
       knockdown: true,
+      bounce: true,
+      dot: 90,
       box: { x: 46, y: 90, w: 90, h: 130 },
     },
     quote: '피 냄새가 나는군… 아직 사냥은 끝나지 않았다!',
@@ -857,7 +1011,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'ALCHEMIST Z',
     gender: 'M',
     title: '독병과 연금술 화염을 뿌리는 매드 사이언티스트',
-    style: '설치 · 견제',
+    style: '설치 · 독 · 화염',
     color: '#7aff3a',
     glow: '#e0ff6a',
     fx: 'poison',
@@ -886,9 +1040,14 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1,
       defense: 1,
     },
+    normals: {
+      punch: { name: '플라스크 휘두르기' },
+      kick: { name: '약품 발차기' },
+      cPunch: { name: '산성 튀기기', dot: 14 },
+    },
     sp1: {
       name: '맹독 플라스크',
-      anim: 'cast',
+      anim: 'throw',
       fx: 'poison',
       startup: 12,
       active: 2,
@@ -903,12 +1062,13 @@ const CHARACTERS: readonly CharacterDef[] = [
         w: 34,
         h: 34,
         life: 120,
-        linger: 96,
-        damage: 80,
+        linger: 110,
+        damage: 64,
         hits: 4,
         interval: 18,
         hitstun: 18,
         push: 1,
+        dot: 40,
       }),
     },
     sp2: {
@@ -925,26 +1085,33 @@ const CHARACTERS: readonly CharacterDef[] = [
       box: { x: 140, y: 88, w: 220, h: 54 },
     },
     superArt: {
-      name: '대연성 — 그랜드 트랜스뮤테이션',
+      name: '대연성 — 맹독의 비',
       anim: 'super',
       fx: 'poison',
       startup: 10,
-      active: 4,
-      recovery: 34,
+      active: 24,
+      recovery: 30,
       projectile: proj({
         fx: 'poison',
-        x: 80,
-        y: 150,
-        vx: 7,
-        w: 120,
-        h: 300,
-        life: 90,
-        damage: 300,
-        hits: 6,
-        interval: 5,
+        sky: true,
+        spread: 84,
+        x: 40,
+        y: 0,
+        vx: 0,
+        vy: -9,
+        gravity: 0.3,
+        w: 34,
+        h: 34,
+        life: 150,
+        linger: 120,
+        damage: 66,
+        hits: 3,
+        interval: 14,
+        count: 5,
+        gap: 5,
         pierce: true,
-        knockdown: true,
-        launch: 12,
+        launch: 6,
+        dot: 30,
       }),
     },
     quote: '흥미로운 실험이었어. 결과: 내 공식이 옳았다!',
@@ -955,7 +1122,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'FROST SAMURAI',
     gender: 'M',
     title: '발도술과 빙결 검풍을 쏘는 고고한 검객',
-    style: '카운터 · 일격',
+    style: '받아치기 · 빙결 · 일격',
     color: '#5ac8ff',
     glow: '#e8faff',
     fx: 'ice',
@@ -984,6 +1151,11 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1.25,
       defense: 1,
     },
+    normals: {
+      punch: { name: '발도 베기', damage: 42 },
+      kick: { name: '칼집 치기', damage: 70 },
+      cKick: { name: '하단 베기', slow: 40 },
+    },
     sp1: {
       name: '빙결 검풍',
       anim: 'slash',
@@ -998,20 +1170,33 @@ const CHARACTERS: readonly CharacterDef[] = [
         w: 42,
         h: 80,
         damage: 80,
+        slow: 150,
       }),
     },
     sp2: {
-      name: '발도술 · 설화',
+      name: '설화 받아치기',
+      anim: 'parry',
+      fx: 'ice',
+      startup: 2,
+      active: 22,
+      recovery: 20,
+      parry: true,
+    },
+    followup: {
+      name: '설화 일섬 (받아치기 성공)',
       anim: 'rush',
       fx: 'ice',
-      startup: 9,
-      active: 10,
-      recovery: 26,
-      damage: 115,
+      startup: 2,
+      active: 6,
+      recovery: 18,
+      damage: 150,
       selfVx: 18,
+      invul: 16,
+      passThrough: true,
       knockdown: true,
-      hitstop: 12,
-      box: { x: 40, y: 90, w: 90, h: 100 },
+      slow: 150,
+      hitstop: 16,
+      box: { x: 30, y: 90, w: 100, h: 110 },
     },
     superArt: {
       name: '절대영도',
@@ -1024,7 +1209,9 @@ const CHARACTERS: readonly CharacterDef[] = [
       hits: 8,
       interval: 3,
       selfVx: 16,
+      passThrough: true,
       knockdown: true,
+      slow: 240,
       box: { x: 50, y: 90, w: 110, h: 150 },
     },
     quote: '칼집에서 칼을 뽑는 순간, 승부는 이미 끝나 있었다.',
@@ -1035,7 +1222,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'VIOLET CAT',
     gender: 'F',
     title: '맹독 고양이 손톱을 휘두르는 날렵한 수인',
-    style: '초고속 · 혼란',
+    style: '초고속 · 등 뒤 기습 · 맹독',
     color: '#b04aff',
     glow: '#ff7af2',
     fx: 'venom',
@@ -1064,41 +1251,39 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 0.9,
       defense: 1.04,
     },
+    normals: {
+      punch: { name: '냥냥 펀치', hits: 2, interval: 2, damage: 38 },
+      kick: { name: '꼬리 채찍', anim: 'spin', damage: 60, dot: 10 },
+      aKick: { name: '고양이 드롭', damage: 64 },
+    },
     sp1: {
-      name: '맹독 손톱',
-      anim: 'slash',
+      name: '섀도우 스텝',
+      anim: 'rush',
       fx: 'venom',
-      startup: 8,
-      active: 2,
-      recovery: 18,
-      projectile: proj({
-        fx: 'venom',
-        x: 60,
-        y: 95,
-        vx: 10,
-        w: 62,
-        h: 64,
-        life: 22,
-        damage: 75,
-        hits: 3,
-        interval: 3,
-        hitstun: 14,
-      }),
+      startup: 6,
+      active: 9,
+      recovery: 16,
+      damage: 54,
+      selfVx: 18,
+      invul: 12,
+      passThrough: true,
+      dot: 50,
+      box: { x: 0, y: 70, w: 70, h: 90 },
     },
     sp2: {
-      name: '캣 포우즈',
-      anim: 'dive',
+      name: '캣 플립',
+      anim: 'flip',
       fx: 'venom',
-      startup: 5,
-      active: 40,
-      recovery: 12,
-      damage: 90,
-      selfVy: 10,
-      selfVx: 8,
-      untilLand: true,
-      level: 'overhead',
+      startup: 4,
+      active: 9,
+      recovery: 18,
+      damage: 98,
+      invul: 7,
+      selfVy: 10.5,
+      selfVx: -3.5,
+      launch: 12,
       knockdown: true,
-      box: { x: 30, y: 40, w: 76, h: 70 },
+      box: { x: 26, y: 120, w: 70, h: 110 },
     },
     superArt: {
       name: '나인 라이브즈',
@@ -1111,7 +1296,9 @@ const CHARACTERS: readonly CharacterDef[] = [
       hits: 9,
       interval: 3,
       selfVx: 14,
+      passThrough: true,
       knockdown: true,
+      dot: 90,
       box: { x: 44, y: 85, w: 90, h: 120 },
     },
     quote: '냐하~ 발톱 자국은 기념으로 남겨 줄게♪',
@@ -1122,7 +1309,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'PUPPET LILITH',
     gender: 'F',
     title: '거대한 기괴 인형을 조종하는 듀얼 캐릭터',
-    style: '원거리 · 듀얼',
+    style: '원격 잡기 · 듀얼 조종',
     color: '#ff4a7a',
     glow: '#ffd0e0',
     fx: 'puppet',
@@ -1151,17 +1338,25 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1.5,
       defense: 1,
     },
+    normals: {
+      punch: { name: '인형 할퀴기' },
+      kick: { name: '인형 박치기', damage: 72 },
+      cKick: { name: '실 걸기', slow: 50 },
+    },
     sp1: {
       name: '인형의 손',
-      anim: 'beam',
+      anim: 'throw',
       fx: 'puppet',
       startup: 15,
       active: 6,
-      recovery: 22,
-      damage: 85,
-      push: -7,
-      hitstun: 24,
-      box: { x: 200, y: 92, w: 330, h: 60 },
+      recovery: 24,
+      damage: 110,
+      grab: true,
+      level: 'unblockable',
+      push: -12,
+      hitstun: 30,
+      slow: 120,
+      box: { x: 200, y: 92, w: 260, h: 80 },
     },
     sp2: {
       name: '꼭두각시 무도회',
@@ -1213,7 +1408,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'NEON VALKYRIE',
     gender: 'F',
     title: '천사 날개에서 레이저 포격을 쏟아붓는 사이버 여전사',
-    style: '공중전 · 포격',
+    style: '공중 포격 · 대공',
     color: '#3affb0',
     glow: '#e8fff6',
     fx: 'light',
@@ -1242,13 +1437,18 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1.1,
       defense: 1,
     },
+    normals: {
+      punch: { name: '랜스 찌르기', anim: 'rush', damage: 42 },
+      aKick: { name: '랜스 낙하', damage: 72, box: { x: 30, y: 20, w: 70, h: 70 } },
+    },
     sp1: {
-      name: '윙 레이저',
+      name: '윙 레이저 (공중 가능)',
       anim: 'cast',
       fx: 'light',
       startup: 12,
       active: 8,
       recovery: 20,
+      airOk: true,
       projectile: proj({
         fx: 'light',
         x: 40,
@@ -1263,7 +1463,7 @@ const CHARACTERS: readonly CharacterDef[] = [
       }),
     },
     sp2: {
-      name: '발키리 다이브',
+      name: '발키리 어센션',
       anim: 'upper',
       fx: 'light',
       startup: 4,
@@ -1311,7 +1511,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'SCARLET WHIP',
     gender: 'F',
     title: '채찍과 장미 가시 탄막을 다루는 가시 여왕',
-    style: '초장거리 · 견제',
+    style: '초장거리 · 가시 덩굴',
     color: '#ff2a4a',
     glow: '#ffb0c0',
     fx: 'rose',
@@ -1340,23 +1540,34 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1.6,
       defense: 1,
     },
+    normals: {
+      punch: { name: '채찍 스냅', damage: 36 },
+      kick: { name: '하이힐 킥' },
+      cKick: { name: '발목 휘감기', slow: 40 },
+    },
     sp1: {
-      name: '가시 장미 탄막',
+      name: '가시 덩굴',
       anim: 'cast',
       fx: 'rose',
-      startup: 11,
-      active: 12,
-      recovery: 20,
+      startup: 12,
+      active: 20,
+      recovery: 22,
       projectile: proj({
         fx: 'rose',
-        y: 105,
-        vx: 9,
-        w: 30,
-        h: 30,
-        damage: 32,
-        count: 3,
+        x: 70,
+        y: 46,
+        vx: 0,
+        w: 50,
+        h: 92,
+        life: 22,
+        delay: 5,
+        step: 72,
+        damage: 40,
+        count: 4,
         gap: 5,
-        hitstun: 14,
+        pierce: true,
+        launch: 5,
+        dot: 20,
       }),
     },
     sp2: {
@@ -1372,29 +1583,19 @@ const CHARACTERS: readonly CharacterDef[] = [
       box: { x: 220, y: 20, w: 380, h: 34 },
     },
     superArt: {
-      name: '가시 정원',
-      anim: 'super',
+      name: '블러디 로즈 왈츠',
+      anim: 'spin',
       fx: 'rose',
       startup: 10,
-      active: 36,
+      active: 34,
       recovery: 28,
-      projectile: proj({
-        fx: 'rose',
-        x: 90,
-        y: 100,
-        vx: 0,
-        w: 76,
-        h: 200,
-        life: 26,
-        delay: 6,
-        step: 90,
-        damage: 45,
-        count: 7,
-        gap: 4,
-        pierce: true,
-        knockdown: true,
-        launch: 9,
-      }),
+      damage: 300,
+      hits: 10,
+      interval: 3,
+      push: -2,
+      knockdown: true,
+      dot: 60,
+      box: { x: 0, y: 100, w: 320, h: 200 },
     },
     quote: '아름다운 장미에는 가시가 있는 법. 몰랐니?',
   },
@@ -1404,7 +1605,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'CHAINSAW BELLA',
     gender: 'F',
     title: '전기톱과 고속 회전 톱날을 휘두르는 고스룩 소녀',
-    style: '다단히트 · 파워',
+    style: '다단히트 · 부메랑 · 아머',
     color: '#ff8a1a',
     glow: '#ffe0a0',
     fx: 'saw',
@@ -1433,37 +1634,49 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1.05,
       defense: 1,
     },
+    normals: {
+      punch: { name: '톱날 긋기', hits: 2, interval: 3, damage: 44 },
+      kick: { name: '부츠 스탬프', anim: 'stomp', damage: 72 },
+      cPunch: { name: '하단 톱질', hits: 2, interval: 3 },
+    },
     sp1: {
-      name: '회전 톱날',
-      anim: 'cast',
+      name: '부메랑 톱날',
+      anim: 'throw',
       fx: 'saw',
       startup: 13,
       active: 2,
       recovery: 24,
       projectile: proj({
         fx: 'saw',
-        y: 70,
-        vx: 8,
+        y: 76,
+        vx: 10,
         w: 52,
         h: 52,
-        damage: 96,
+        life: 76,
+        boomerang: true,
+        pierce: true,
+        damage: 104,
         hits: 4,
-        interval: 6,
+        interval: 8,
         hitstun: 14,
       }),
     },
     sp2: {
-      name: '그라인드 러시',
-      anim: 'rush',
+      name: '그라인드 어퍼',
+      anim: 'upper',
       fx: 'saw',
-      startup: 9,
-      active: 24,
-      recovery: 22,
-      damage: 120,
-      hits: 6,
-      interval: 4,
-      selfVx: 8,
-      box: { x: 50, y: 85, w: 80, h: 80 },
+      startup: 7,
+      active: 14,
+      recovery: 24,
+      damage: 130,
+      hits: 5,
+      interval: 3,
+      armor: 1,
+      selfVy: 10,
+      selfVx: 3,
+      launch: 11,
+      knockdown: true,
+      box: { x: 36, y: 120, w: 80, h: 130 },
     },
     superArt: {
       name: '그라인드 매서커',
@@ -1476,6 +1689,8 @@ const CHARACTERS: readonly CharacterDef[] = [
       hits: 12,
       interval: 2,
       selfVx: 12,
+      armor: 3,
+      bounce: true,
       knockdown: true,
       box: { x: 56, y: 90, w: 100, h: 140 },
     },
@@ -1487,7 +1702,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'ARCANE SPECTRE',
     gender: 'F',
     title: '유령 모자를 쓴 사악한 마법 소녀',
-    style: '트릭키 · 설치',
+    style: '유도 · 소환 · 영혼 흡수',
     color: '#4affe0',
     glow: '#b0fff2',
     fx: 'ghost',
@@ -1516,13 +1731,19 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1.1,
       defense: 1,
     },
+    normals: {
+      punch: { name: '지팡이 찌르기' },
+      kick: { name: '유령 발차기', fx: 'ghost' },
+      cPunch: { name: '혼불 튕기기', slow: 30 },
+    },
     sp1: {
-      name: '유령 구체',
+      name: '유령 구체 (공중 가능)',
       anim: 'cast',
       fx: 'ghost',
       startup: 12,
       active: 2,
       recovery: 22,
+      airOk: true,
       projectile: proj({
         fx: 'ghost',
         y: 110,
@@ -1556,6 +1777,7 @@ const CHARACTERS: readonly CharacterDef[] = [
         launch: 11,
         knockdown: true,
         pierce: true,
+        slow: 120,
       }),
     },
     superArt: {
@@ -1568,6 +1790,7 @@ const CHARACTERS: readonly CharacterDef[] = [
       damage: 300,
       hits: 10,
       interval: 3,
+      drain: 0.35,
       knockdown: true,
       box: { x: 460, y: 100, w: 900, h: 96 },
     },
@@ -1579,7 +1802,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     en: 'GUNSLINGER ROSE',
     gender: 'F',
     title: '쌍권총과 산탄총을 고속 사격하는 바운티 헌터',
-    style: '원거리 · 속사',
+    style: '원거리 속사 · 구르기',
     color: '#ffb02a',
     glow: '#fff0b0',
     fx: 'bullet',
@@ -1608,13 +1831,36 @@ const CHARACTERS: readonly CharacterDef[] = [
       reach: 1,
       defense: 1,
     },
+    normals: {
+      punch: {
+        name: '권총 사격',
+        anim: 'shoot',
+        damage: 0,
+        box: null,
+        projectile: proj({
+          fx: 'bullet',
+          x: 52,
+          y: 112,
+          vx: 20,
+          w: 22,
+          h: 10,
+          life: 13,
+          damage: 32,
+          hitstun: 15,
+          blockstun: 10,
+          push: 3,
+        }),
+      },
+      kick: { name: '박차 킥' },
+    },
     sp1: {
-      name: '퀵 드로우',
-      anim: 'cast',
+      name: '퀵 드로우 (공중 가능)',
+      anim: 'shoot',
       fx: 'bullet',
       startup: 9,
-      active: 8,
+      active: 10,
       recovery: 18,
+      airOk: true,
       projectile: proj({
         fx: 'bullet',
         x: 60,
@@ -1622,21 +1868,23 @@ const CHARACTERS: readonly CharacterDef[] = [
         vx: 22,
         w: 28,
         h: 12,
-        damage: 40,
-        count: 2,
-        gap: 6,
+        damage: 54,
+        count: 3,
+        gap: 4,
         hitstun: 14,
         push: 3,
       }),
     },
     sp2: {
-      name: '산탄 폭발',
-      anim: 'beam',
+      name: '컴뱃 롤 샷건',
+      anim: 'shoot',
       fx: 'bullet',
-      startup: 12,
+      startup: 14,
       active: 4,
-      recovery: 26,
+      recovery: 24,
       damage: 115,
+      startVx: 9,
+      invul: 11,
       knockdown: true,
       push: 10,
       hitstop: 12,
@@ -1644,7 +1892,7 @@ const CHARACTERS: readonly CharacterDef[] = [
     },
     superArt: {
       name: '데드 오어 얼라이브',
-      anim: 'super',
+      anim: 'shoot',
       fx: 'bullet',
       startup: 9,
       active: 30,
@@ -1672,9 +1920,22 @@ const CHARACTERS: readonly CharacterDef[] = [
  * 기본기 (주먹·발차기) — 캐릭터 능력치로 만든다
  * ========================================================= */
 
-function buildNormals(
-  c: CharacterDef,
-): Record<'punch' | 'kick' | 'cPunch' | 'cKick' | 'aPunch' | 'aKick', MoveDef> {
+/** 공통 기본기에 캐릭터 고유 기본기(이름 · 동작 · 판정)를 덮어쓴다 — 판정 상자는 캐릭터 크기에 맞춘다 */
+function buildNormals(c: CharacterDef): Record<NormalId, MoveDef> {
+  const base = commonNormals(c);
+  const over = c.normals;
+  if (!over) return base;
+  const s = c.scale;
+  for (const id of Object.keys(over) as NormalId[]) {
+    const o = over[id];
+    if (!o) continue;
+    const box = o.box ? { x: o.box.x * s, y: o.box.y * s, w: o.box.w * s, h: o.box.h * s } : o.box;
+    base[id] = { ...base[id], ...o, ...(o.box !== undefined ? { box } : {}), id };
+  }
+  return base;
+}
+
+function commonNormals(c: CharacterDef): Record<NormalId, MoveDef> {
   const s = c.scale;
   const r = c.stats.reach;
   const p = c.stats.power;
@@ -1797,7 +2058,11 @@ function buildNormals(
   };
 }
 
-function buildSpecial(c: CharacterDef, id: 'sp1' | 'sp2', src: CharacterDef['sp1']): MoveDef {
+function buildSpecial(
+  c: CharacterDef,
+  id: 'sp1' | 'sp2' | 'ex',
+  src: CharacterDef['sp1'],
+): MoveDef {
   return {
     ...BASE_MOVE,
     fx: c.fx,
@@ -1937,6 +2202,7 @@ export class CharacterRegistry {
       super: buildSuper(c, false),
       ult: buildSuper(c, true),
       burst: BURST_MOVE,
+      ex: buildSpecial(c, 'ex', c.followup ?? { name: '', anim: 'punch' }),
     };
     const set = Object.fromEntries(Object.entries(raw).map(([k, m]) => [k, quicken(m)])) as MoveSet;
     this.moveCache.set(id, set);

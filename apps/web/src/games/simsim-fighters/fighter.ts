@@ -1,4 +1,6 @@
 import {
+  DOT_FRAMES,
+  DOT_TICK,
   BACKDASH_FRAMES,
   BACKDASH_INVUL,
   BURST_COST,
@@ -71,6 +73,8 @@ export type SimEvent =
   | { type: 'swing'; side: 0 | 1; move: MoveId; x: number; y: number }
   | { type: 'teleport'; side: 0 | 1; from: number; to: number; y: number }
   | { type: 'burst'; side: 0 | 1; x: number; y: number }
+  | { type: 'parry'; side: 0 | 1; x: number; y: number }
+  | { type: 'armor'; side: 0 | 1; x: number; y: number }
   | {
       type: 'hit';
       side: 0 | 1;
@@ -169,6 +173,15 @@ export class Fighter {
   tapT = 0;
   bufDash = 0;
   bufDashDir = 0;
+  /** 상태 이상 — 지속 피해(남은 프레임 · 한 번에 깎이는 양 · 속성) · 둔화 남은 프레임 */
+  dotT = 0;
+  dotPer = 0;
+  dotFx = '';
+  slowT = 0;
+  /** 이번 기술로 버틴 슈퍼아머 타수 */
+  armorUsed = 0;
+  /** 다음 착지 때 바닥에서 한 번 튀어 오른다 */
+  bounce = false;
   /** 맞은 순간 하얗게 번쩍이는 연출용 */
   flash = 0;
   stats: FighterStats = { damage: 0, maxCombo: 0, supers: 0, bursts: 0, blocks: 0 };
@@ -247,6 +260,23 @@ export class Fighter {
     this.bufDash = 0;
     this.motion = [];
     this.flash = 0;
+    this.dotT = 0;
+    this.dotPer = 0;
+    this.slowT = 0;
+    this.bounce = false;
+  }
+
+  /** 지속 피해 걸기 — 이미 걸려 있으면 남은 양에 더해 3초를 새로 센다 */
+  addDot(total: number, fx: string) {
+    const left = this.dotT > 0 ? this.dotPer * Math.ceil(this.dotT / DOT_TICK) : 0;
+    this.dotT = DOT_FRAMES;
+    this.dotPer = (left + total) / (DOT_FRAMES / DOT_TICK);
+    this.dotFx = fx;
+  }
+
+  /** 둔화 중이면 이동 속도 배율 */
+  get slowMul() {
+    return this.slowT > 0 ? 0.6 : 1;
   }
 
   addMeter(n: number) {
@@ -376,6 +406,7 @@ export class Fighter {
 
   toNeutral() {
     this.move = null;
+    this.bounce = false;
     this.setAct(this.airborne ? 'air' : 'idle');
     this.combo = 0;
     this.comboDamage = 0;
@@ -388,6 +419,7 @@ export class Fighter {
     const dashMomentum = this.act === 'dash' && this.walkDir > 0;
     if (!this.airborne && !d.air) this.vx = dashMomentum ? this.vx * 0.55 : 0;
     this.bufDash = 0;
+    this.armorUsed = 0;
     this.move = id;
     this.setAct('attack');
     this.moveHits = 0;
@@ -420,6 +452,14 @@ export class Fighter {
     this.t++;
     if (this.invul > 0) this.invul--;
     if (this.flash > 0) this.flash--;
+    if (this.slowT > 0) this.slowT--;
+    if (this.dotT > 0) {
+      this.dotT--;
+      // 지속 피해로는 쓰러지지 않는다 (체력 1 까지만)
+      if (this.dotT % DOT_TICK === 0 && this.act !== 'ko' && this.hp > 1) {
+        this.hp = Math.max(1, this.hp - Math.max(1, Math.round(this.dotPer)));
+      }
+    }
     if (!this.guarding && this.act !== 'blockstun' && this.guardHp < GUARD_MAX) {
       this.guardHp = Math.min(GUARD_MAX, this.guardHp + GUARD_REGEN);
     }
@@ -453,7 +493,7 @@ export class Fighter {
         const fwd = this.walkDir > 0;
         const len = fwd ? DASH_FRAMES : BACKDASH_FRAMES;
         const k = this.t / len;
-        const top = fwd ? 6.2 + s.walk * 1.15 : 5.4 + s.walk * 0.9;
+        const top = (fwd ? 6.2 + s.walk * 1.15 : 5.4 + s.walk * 0.9) * this.slowMul;
         const speed = top * (k < 0.55 ? 1 : Math.max(0, 1 - (k - 0.55) / 0.45) ** 1.4);
         this.vx = this.facing * this.walkDir * speed;
         if (this.t >= len) {
@@ -466,7 +506,7 @@ export class Fighter {
         if (this.t >= JUMP_SQUAT) {
           const s = this.def.stats;
           this.vy = s.jumpVy;
-          this.vx = this.jumpDir * this.facing * s.jumpVx;
+          this.vx = this.jumpDir * this.facing * s.jumpVx * this.slowMul;
           this.h = 0.01;
           this.setAct('air');
           world.emit({ type: 'jump', side: this.side, x: this.x });
@@ -493,6 +533,9 @@ export class Fighter {
     const first = d.startup + 1;
     const activeEnd = d.startup + d.active;
     const total = activeEnd + d.recovery;
+
+    // 발생 동안 앞으로 미끄러진다 (구르기 · 돌격 준비)
+    if (d.startVx > 0 && this.t <= d.startup && !this.airborne) this.vx = this.facing * d.startVx;
 
     if (this.t === first) {
       world.emit({
@@ -574,8 +617,20 @@ export class Fighter {
       return;
     }
 
-    // 캔슬 가능 상태
     const d = this.moveDef;
+
+    // 연계기 — 맞히거나 막힌 뒤 같은 버튼을 한 번 더 (볼트 스트레이트 → 썬더 어퍼)
+    if (this.act === 'attack' && d && d.chain && this.connected && this.t > d.startup) {
+      const buf = d.chain === 'A' ? this.bufA : this.bufS;
+      if (buf > 0) {
+        this.bufA = 0;
+        this.bufS = 0;
+        this.startMove('ex', world);
+        return;
+      }
+    }
+
+    // 캔슬 가능 상태
     let cancel = 0;
     if (this.act === 'attack' && d && this.connected && this.t > d.startup && grounded) {
       if (d.superLevel === 0 && d.id !== 'burst')
@@ -617,6 +672,17 @@ export class Fighter {
       }
     }
     if (airFree) {
+      // 공중 필살기 (↓→ + 버튼, 공중에서 쓸 수 있는 기술만)
+      if ((this.bufA > 0 || this.bufS > 0) && this.qcf()) {
+        const id = this.bufA > 0 ? 'sp1' : 'sp2';
+        if (this.moves[id].airOk) {
+          this.bufA = 0;
+          this.bufS = 0;
+          this.motion = [];
+          this.startMove(id, world);
+          return;
+        }
+      }
       if (this.bufS > 0) {
         this.bufS = 0;
         this.startMove('aKick', world);
@@ -677,7 +743,8 @@ export class Fighter {
       const s = this.def.stats;
       if (this.act !== 'walk' || this.walkDir !== dir) this.setAct('walk');
       this.walkDir = dir;
-      this.vx = this.facing * (dir > 0 ? s.walk * WALK_FWD : -s.walk * 0.8 * WALK_BACK);
+      const walk = s.walk * this.slowMul;
+      this.vx = this.facing * (dir > 0 ? walk * WALK_FWD : -walk * 0.8 * WALK_BACK);
       return;
     }
     if (this.act !== 'idle') this.setAct('idle');
@@ -728,6 +795,7 @@ export class Fighter {
         const d = this.moveDef;
         this.vx = 0;
         if (d && d.untilLand) {
+          if (d.landProj) world.spawnProjectile(this, d.landProj, 0, this);
           this.t = d.startup + d.active + 1;
           return;
         }
@@ -737,6 +805,14 @@ export class Fighter {
         break;
       }
       case 'hitstun':
+        if (this.bounce && this.hp > 0) {
+          // 바닥에 부딪혀 한 번 튀어 오른다 — 이어서 때릴 수 있다
+          this.bounce = false;
+          this.vy = 7.5;
+          this.h = 0.01;
+          this.vx *= 0.5;
+          break;
+        }
         if (this.hardKD || this.hp <= 0) {
           this.vx *= 0.3;
           this.setAct('knockdown');

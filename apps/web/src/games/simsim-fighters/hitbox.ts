@@ -42,6 +42,16 @@ export interface Projectile {
   /** 다운된 상대도 맞는다 (대폭발) */
   otg: boolean;
   dead: boolean;
+  /** 부메랑 — 처음 속도 · 되돌아오는 중인지 */
+  boomerang: boolean;
+  speed0: number;
+  /** 음파 — 출렁이는 폭 · 기준 높이 */
+  wave: number;
+  waveBase: number;
+  growW: number;
+  growH: number;
+  dot: number;
+  slow: number;
 }
 
 /** 맞았을 때 적용할 값 (근접 기술 · 투사체 공통) */
@@ -63,6 +73,10 @@ interface HitParams {
   grab: boolean;
   /** 밀어내는 방향 (+1 = 오른쪽) */
   dir: number;
+  dot: number;
+  slow: number;
+  drain: number;
+  bounce: boolean;
 }
 
 /** 시뮬레이션이 HitboxManager 에게 열어 주는 기능 */
@@ -121,7 +135,7 @@ export class HitboxManager {
         vic.x = world.clampX(att.x + att.facing * 46 * att.def.scale);
       }
       const hurt = vic.hurtbox() ?? box;
-      this.apply(
+      const r = this.apply(
         world,
         att,
         vic,
@@ -142,10 +156,16 @@ export class HitboxManager {
           melee: true,
           grab: d.grab,
           dir: Math.sign(vic.x - att.x) || att.facing,
+          dot: d.dot / d.hits,
+          slow: d.slow,
+          drain: d.drain,
+          bounce: last && d.bounce,
         },
         (box.cx + hurt.cx) / 2,
         Math.min(box.cy, hurt.cy + hurt.h / 3),
       );
+      // 받아치기에 막히면 맞힌 것으로 치지 않는다 (캔슬 불가)
+      if (r === 'parry') att.connected = false;
     }
 
     // 2) 투사체끼리 부딪치면 상쇄
@@ -176,12 +196,12 @@ export class HitboxManager {
       p.hitsLeft--;
       p.cd = p.interval;
       const last = p.hitsLeft <= 0;
-      if (last) p.dead = true;
+      if (last && !p.boomerang) p.dead = true;
       if (vic.act === 'knockdown' || vic.act === 'getup') {
         // 대폭발이 누운 상대를 다시 띄운다
         vic.h = 0.01;
       }
-      this.apply(
+      const r = this.apply(
         world,
         att,
         vic,
@@ -202,10 +222,16 @@ export class HitboxManager {
           melee: false,
           grab: false,
           dir: p.otg ? Math.sign(vic.x - att.x) || att.facing : Math.sign(p.vx) || p.facing,
+          dot: p.dot / p.totalHits,
+          slow: p.slow,
+          drain: 0,
+          bounce: false,
         },
         (p.x + hurt.cx) / 2,
         Math.min(p.y, hurt.cy + hurt.h / 3),
       );
+      // 받아치기에 걸린 투사체는 사라진다
+      if (r === 'parry') p.dead = true;
     }
   }
 
@@ -214,9 +240,62 @@ export class HitboxManager {
     return superLevel === 0 && vic.act === 'hitstun' && vic.airborne && vic.juggle >= JUGGLE_LIMIT;
   }
 
-  private apply(world: HitWorld, att: Fighter, vic: Fighter, p: HitParams, hx: number, hy: number) {
+  private apply(
+    world: HitWorld,
+    att: Fighter,
+    vic: Fighter,
+    p: HitParams,
+    hx: number,
+    hy: number,
+  ): 'hit' | 'block' | 'parry' | 'armor' {
     const dir = p.dir;
     const atWall = vic.x <= WALL + 4 || vic.x >= STAGE_W - WALL - 4;
+    const vd = vic.moveDef;
+    const inMove = vic.act === 'attack' && !!vd && vic.t <= vd.startup + vd.active;
+
+    // 받아치기 — 자세를 잡은 동안 받은 공격을 흘리고 바로 반격한다 (잡기 · 막을 수 없는 공격은 제외)
+    if (inMove && vd && vd.parry && vic.t > vd.startup && !p.grab && p.level !== 'unblockable') {
+      vic.facing = att.x >= vic.x ? 1 : -1;
+      vic.startMove('ex', world);
+      vic.invul = Math.max(vic.invul, 18);
+      vic.addMeter(10);
+      world.addHitstop(14);
+      world.emit({ type: 'parry', side: vic.side, x: hx, y: hy });
+      return 'parry';
+    }
+
+    // 슈퍼아머 — 정해진 타수까지는 피해 절반만 받고 기술을 계속한다
+    const armorDmg = Math.max(1, Math.round(p.damage * 0.5 * vic.def.stats.defense));
+    if (
+      inMove &&
+      vd &&
+      vd.armor > vic.armorUsed &&
+      !p.grab &&
+      p.superLevel === 0 &&
+      vic.hp > armorDmg
+    ) {
+      vic.armorUsed++;
+      vic.hp -= armorDmg;
+      att.stats.damage += armorDmg;
+      att.addMeter(p.meter * 0.5);
+      vic.flash = 4;
+      world.addHitstop(6);
+      world.emit({ type: 'armor', side: vic.side, x: hx, y: hy });
+      world.emit({
+        type: 'hit',
+        side: vic.side,
+        x: hx,
+        y: hy,
+        damage: armorDmg,
+        blocked: false,
+        heavy: false,
+        counter: false,
+        fx: p.fx,
+        combo: 0,
+        superLevel: 0,
+      });
+      return 'armor';
+    }
 
     if (vic.canBlock(p.level)) {
       // 가드 — 깎기 피해 · 가드 게이지 감소
@@ -238,7 +317,7 @@ export class HitboxManager {
         vic.flash = 8;
         world.addHitstop(16);
         world.emit({ type: 'guardCrush', side: vic.side, x: vic.x, y: vic.h + 100 });
-        return;
+        return 'block';
       }
       vic.move = null;
       vic.setAct('blockstun');
@@ -258,11 +337,10 @@ export class HitboxManager {
         combo: 0,
         superLevel: p.superLevel,
       });
-      return;
+      return 'block';
     }
 
     // 피격
-    const vd = vic.moveDef;
     const counter = vic.act === 'attack' && !!vd && vic.t <= vd.startup && vd.superLevel === 0;
     const scale = Math.max(0.3, 1 - 0.085 * vic.combo);
     const raw = p.damage * scale * vic.def.stats.defense * (counter ? 1.2 : 1);
@@ -276,6 +354,10 @@ export class HitboxManager {
     att.addMeter(p.meter);
     vic.addMeter(dmg * 0.05);
     if (p.ult && att.ultState === 1) att.ultState = 2;
+    // 흡혈 · 지속 피해 · 둔화
+    if (p.drain > 0) att.hp = Math.min(att.maxHp, att.hp + Math.round(dealt * p.drain));
+    if (p.dot > 0 && vic.hp > 0) vic.addDot(p.dot, p.fx);
+    if (p.slow > 0) vic.slowT = Math.max(vic.slowT, p.slow);
     if (vic.hp <= 0 && p.superLevel > 0) att.superFinish = true;
 
     vic.move = null;
@@ -292,7 +374,9 @@ export class HitboxManager {
       vic.vx = dir * Math.max(2, p.push * 0.6);
       vic.hardKD = vic.hardKD || p.knockdown || p.launch > 0;
       vic.stun = p.hitstun;
+      if (p.bounce) vic.bounce = true;
     } else if (p.knockdown) {
+      if (p.bounce) vic.bounce = true;
       vic.vy = 5;
       vic.h = 0.01;
       vic.vx = dir * Math.max(2.5, p.push * 0.6);
@@ -318,5 +402,6 @@ export class HitboxManager {
       combo: vic.combo,
       superLevel: p.superLevel,
     });
+    return 'hit';
   }
 }

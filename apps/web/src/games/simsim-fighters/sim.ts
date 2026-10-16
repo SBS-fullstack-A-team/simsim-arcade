@@ -90,6 +90,10 @@ export class FightSim implements HitWorld, FighterWorld {
     }
     // 같은 줄로 여러 발 쏘는 기술은 높이를 조금씩 다르게
     if (spec.count > 2 && !spec.sky && !spec.step) y += ((index % 3) - 1) * 14;
+    // 공중에서 쏘면 비스듬히 아래로 (땅에 닿으면 사라진다)
+    const airShot = owner.airborne && !!owner.moveDef?.airOk && !spec.sky;
+    const vy = airShot ? -Math.abs(spec.vx) * 0.55 : spec.vy;
+    const gravity = airShot ? 0.0001 : spec.gravity;
     const ult = owner.move === 'ult';
     this.projectiles.push({
       id: this.nextId++,
@@ -99,8 +103,8 @@ export class FightSim implements HitWorld, FighterWorld {
       x: this.clampX(x),
       y,
       vx: spec.vx * f,
-      vy: spec.vy,
-      gravity: spec.gravity,
+      vy,
+      gravity,
       w: spec.w,
       h: spec.h,
       life: spec.life,
@@ -126,6 +130,14 @@ export class FightSim implements HitWorld, FighterWorld {
       ult,
       otg: spec.fx === 'explosion',
       dead: false,
+      boomerang: spec.boomerang,
+      speed0: spec.vx * f,
+      wave: spec.wave,
+      waveBase: y,
+      growW: spec.growW,
+      growH: spec.growH,
+      dot: spec.dot,
+      slow: spec.slow,
     });
     this.emit({ type: 'projectile', side: owner.side, fx: spec.fx, x, y });
   }
@@ -229,8 +241,18 @@ export class FightSim implements HitWorld, FighterWorld {
     const ha = a.crouching ? 95 : 150;
     const hb = b.crouching ? 95 : 150;
     const vertical = a.h < b.h + hb * b.def.scale && b.h < a.h + ha * a.def.scale;
+    // 관통 돌진 중에는 상대 몸을 지나간다
+    const passing = (f: Fighter) => {
+      const d = f.moveDef;
+      return f.act === 'attack' && !!d && d.passThrough && f.t <= d.startup + d.active + 2;
+    };
     const solid =
-      a.act !== 'ko' && b.act !== 'ko' && a.act !== 'knockdown' && b.act !== 'knockdown';
+      a.act !== 'ko' &&
+      b.act !== 'ko' &&
+      a.act !== 'knockdown' &&
+      b.act !== 'knockdown' &&
+      !passing(a) &&
+      !passing(b);
     const dx = b.x - a.x;
     const minD = wa + wb;
     if (vertical && solid && Math.abs(dx) < minD) {
@@ -276,8 +298,27 @@ export class FightSim implements HitWorld, FighterWorld {
           p.vy = Math.max(-2.4, Math.min(2.4, p.vy));
         }
         p.vy -= p.gravity;
+        if (p.boomerang) {
+          // 부메랑 — 앞으로 날아가다 멈춰서 되돌아온다 (돌아올 때 다시 맞힐 수 있다)
+          p.vx = p.speed0 * Math.cos((Math.PI * p.age) / p.life);
+          if (p.age === Math.round(p.life / 2)) p.hitsLeft = p.totalHits;
+          const owner = this.fighters[p.owner];
+          if (p.age > p.life / 2 && Math.abs(p.x - owner.x) < 30) p.dead = true;
+        }
         p.x += p.vx;
-        p.y += p.vy;
+        if (p.wave > 0) {
+          // 음파 — 위아래로 출렁인다
+          p.waveBase += p.vy;
+          p.y = p.waveBase + Math.sin(p.age * 0.16) * p.wave;
+        } else {
+          p.y += p.vy;
+        }
+        if (p.growW || p.growH) {
+          // 퍼져 나가는 충격파 · 커지는 화염파 (바닥 높이는 그대로)
+          p.w += p.growW;
+          p.h += p.growH;
+          p.y += p.growH / 2;
+        }
         const bottom = p.y - p.h / 2;
         if (bottom <= 0 && (p.gravity > 0 || p.sky)) {
           if (p.linger > 0) {

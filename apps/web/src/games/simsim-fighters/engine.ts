@@ -512,6 +512,20 @@ export class FightEngine {
         }
         break;
       }
+      case 'parry':
+        // 받아치기 성공 — 하얀 섬광 + 얼음 파편
+        this.fx.flare(e.x, sy(e.y), '#ffffff', 70, 0.22);
+        this.fx.ring(e.x, sy(e.y), '#d8f6ff', 14, 520, 0.35, 5);
+        this.fx.shards(e.x, sy(e.y), '#bfefff', 10, 320);
+        this.sound.play('clash');
+        this.shake(6);
+        break;
+      case 'armor':
+        // 슈퍼아머로 버팀 — 주황 불꽃
+        this.fx.spark(e.x, sy(e.y), '#ffb040', 8, 360, 0.25, 3);
+        this.fx.ring(e.x, sy(e.y), '#ffd27a', 10, 300, 0.25, 4);
+        this.sound.play('block');
+        break;
       case 'guardCrush':
         this.fx.shards(e.x, sy(e.y), '#9ad8ff', 14, 380);
         this.fx.ring(e.x, sy(e.y), '#5ac8ff', 10, 500, 0.4, 6);
