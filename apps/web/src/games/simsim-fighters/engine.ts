@@ -586,6 +586,15 @@ export class FightEngine {
       case 'land':
         this.fx.smoke(e.x, GROUND_Y, 3);
         break;
+      case 'dash': {
+        // 박차고 나가는 발밑 먼지 + 캐릭터 색 바람 줄기
+        const f = this.sim.fighters[e.side];
+        const behind = -f.facing * e.dir;
+        this.fx.smoke(e.x + behind * 18, GROUND_Y, 3);
+        this.fx.streaks(e.x + behind * 10, GROUND_Y, f.def.glow, behind);
+        this.sound.play('whoosh');
+        break;
+      }
       default:
         break;
     }

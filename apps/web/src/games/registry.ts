@@ -8,7 +8,7 @@ import fruitSlicerThumbnail from './fruit-slicer/thumbnail.svg';
 import hintQuizThumbnail from './hint-quiz/thumbnail.svg';
 import imjin50Thumbnail from './imjin-50/thumbnail.svg';
 import ruinsDashThumbnail from './ruins-dash/thumbnail.webp';
-import simsimFightersThumbnail from './simsim-fighters/thumbnail.svg';
+import simsimFightersThumbnail from './simsim-fighters/thumbnail.webp';
 import skyAceThumbnail from './sky-ace/thumbnail.webp';
 import wormArenaThumbnail from './worm-arena/thumbnail.svg';
 

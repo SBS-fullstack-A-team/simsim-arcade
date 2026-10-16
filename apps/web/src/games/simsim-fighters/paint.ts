@@ -62,6 +62,8 @@ export function backTone(p: Paint): Paint {
   return { base: p.shade, shade: p.deep, light: p.base, deep: p.deep };
 }
 
+const at2 = (a: V, b: V, k: number): V => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
+
 /** 양 끝이 둥근 테이퍼 팔다리 경로 */
 function capsulePath(ctx: CanvasRenderingContext2D, a: V, b: V, r1: number, r2: number) {
   const dx = b[0] - a[0];
@@ -100,41 +102,51 @@ export function limb(
   ctx.fill();
 
   // 불룩한 근육
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const mx = (a[0] + b[0]) / 2 - ux * 2;
+  const my = (a[1] + b[1]) / 2 - uy * 2;
   if (bulge > 0) {
-    const mx = (a[0] + b[0]) / 2 - ux * 2;
-    const my = (a[1] + b[1]) / 2 - uy * 2;
-    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
     ctx.beginPath();
     ctx.ellipse(mx, my, len * 0.34, (r1 + r2) / 2 + bulge, Math.atan2(uy, ux), 0, TAU);
     ctx.fillStyle = p.base;
     ctx.fill();
   }
 
-  // 그늘 · 하이라이트 (팔다리 모양 안쪽에만)
-  ctx.save();
-  capsulePath(ctx, a, b, r1 + (bulge > 0 ? bulge : 0), r2 + (bulge > 0 ? bulge * 0.5 : 0));
-  ctx.clip();
+  // 입체 음영 — 빛 받는 쪽에서 그늘 쪽으로 원통처럼 (반대편 가장자리엔 반사광)
   const side = nx * LX + ny * LY > 0 ? -1 : 1;
   const sx = nx * side;
   const sy = ny * side;
-  const ext = Math.max(r1, r2) + 2;
-  ctx.beginPath();
-  ctx.moveTo(a[0] - ux * ext + sx * r1 * 0.18, a[1] - uy * ext + sy * r1 * 0.18);
-  ctx.lineTo(b[0] + ux * ext + sx * r2 * 0.18, b[1] + uy * ext + sy * r2 * 0.18);
-  ctx.lineTo(b[0] + ux * ext + sx * (r2 + 8), b[1] + uy * ext + sy * (r2 + 8));
-  ctx.lineTo(a[0] - ux * ext + sx * (r1 + 8), a[1] - uy * ext + sy * (r1 + 8));
-  ctx.closePath();
-  ctx.fillStyle = p.shade;
-  ctx.fill();
-  ctx.globalAlpha *= 0.75;
-  ctx.strokeStyle = p.light;
-  ctx.lineWidth = Math.max(1.2, (r1 + r2) * 0.16);
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(a[0] - sx * r1 * 0.55, a[1] - sy * r1 * 0.55);
-  ctx.lineTo(b[0] - sx * r2 * 0.55, b[1] - sy * r2 * 0.55);
-  ctx.stroke();
-  ctx.restore();
+  if (p.light !== p.base) {
+    const R = Math.max(r1, r2) + Math.max(0, bulge) + 1;
+    const g = ctx.createLinearGradient(mx - sx * R, my - sy * R, mx + sx * R, my + sy * R);
+    g.addColorStop(0, p.light);
+    g.addColorStop(0.24, p.base);
+    g.addColorStop(0.5, p.base);
+    g.addColorStop(0.72, p.shade);
+    g.addColorStop(0.9, p.deep);
+    g.addColorStop(1, p.shade);
+    ctx.fillStyle = g;
+    capsulePath(ctx, a, b, r1, r2);
+    ctx.fill();
+    if (bulge > 0) {
+      ctx.beginPath();
+      ctx.ellipse(mx, my, len * 0.34, (r1 + r2) / 2 + bulge, Math.atan2(uy, ux), 0, TAU);
+      ctx.fill();
+    }
+    // 반짝이는 하이라이트 (빛 받는 쪽 가장자리 안쪽)
+    ctx.save();
+    ctx.globalAlpha *= 0.5;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = Math.max(1, (r1 + r2) * 0.1);
+    ctx.lineCap = 'round';
+    const h0 = at2(a, b, 0.18);
+    const h1 = at2(a, b, 0.78);
+    ctx.beginPath();
+    ctx.moveTo(h0[0] - sx * r1 * 0.5, h0[1] - sy * r1 * 0.5);
+    ctx.lineTo(h1[0] - sx * r2 * 0.5, h1[1] - sy * r2 * 0.5);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   // 외곽선
   capsulePath(ctx, a, b, r1, r2);
@@ -143,9 +155,6 @@ export function limb(
   ctx.strokeStyle = INK;
   ctx.stroke();
   if (bulge > 0) {
-    const mx = (a[0] + b[0]) / 2 - ux * 2;
-    const my = (a[1] + b[1]) / 2 - uy * 2;
-    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
     ctx.beginPath();
     ctx.ellipse(mx, my, len * 0.34, (r1 + r2) / 2 + bulge, Math.atan2(uy, ux), 0, TAU);
     ctx.stroke();

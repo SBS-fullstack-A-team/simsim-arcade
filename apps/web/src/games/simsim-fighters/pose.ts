@@ -3,7 +3,7 @@
  * 기술마다 [준비 자세, 타격 자세] 두 장을 두고 발생 → 지속 → 후딜 프레임에 맞춰 보간한다.
  * 그리기 전용이라 판정에는 영향을 주지 않는다.
  */
-import { GETUP_FRAMES } from './config';
+import { BACKDASH_FRAMES, DASH_FRAMES, GETUP_FRAMES, JUMP_SQUAT } from './config';
 import type { AnimKey, CharacterDef, WeaponKind } from './characters';
 import type { Fighter } from './fighter';
 
@@ -307,7 +307,20 @@ export function lerpPose(a: Pose, b: Pose, k: number): Pose {
     spin: lerp(a.spin, b.spin, k),
   };
 }
-export const ease = (k: number) => 1 - (1 - Math.max(0, Math.min(1, k))) ** 2;
+const clamp01 = (k: number) => Math.max(0, Math.min(1, k));
+export const ease = (k: number) => 1 - (1 - clamp01(k)) ** 2;
+/** 부드럽게 시작해 부드럽게 멈춘다 */
+export const smooth = (k: number) => {
+  const x = clamp01(k);
+  return x * x * (3 - 2 * x);
+};
+/** 빠르게 뻗었다가 살짝 지나쳐서 돌아온다 (타격 순간의 탄력) */
+export const snapBack = (k: number, over = 1.25) => {
+  const x = clamp01(k) - 1;
+  return 1 + (over + 1) * x * x * x + over * x * x;
+};
+/** 빠르게 뻗는다 (끝에서 급정거) */
+export const snap = (k: number) => 1 - (1 - clamp01(k)) ** 3;
 
 /** 캐릭터마다 같은 버튼이라도 동작을 다르게 (큰 무기는 주먹 대신 베기) */
 export function animFor(def: CharacterDef, anim: AnimKey): AnimKey {
@@ -317,56 +330,182 @@ export function animFor(def: CharacterDef, anim: AnimKey): AnimKey {
 }
 
 export function breathe(p: Pose, time: number, amt = 1.4): Pose {
+  // 숨쉬기 — 골반이 먼저, 손은 살짝 늦게 따라온다 (겹침 동작)
   const b = Math.sin(time * 3.2) * amt;
-  return { ...p, hip: [p.hip[0], p.hip[1] + b], fHand: [p.fHand[0], p.fHand[1] + b * 0.6] };
+  const lag = Math.sin(time * 3.2 - 0.7) * amt;
+  return {
+    ...p,
+    hip: [p.hip[0], p.hip[1] + b],
+    lean: p.lean + Math.sin(time * 3.2 - 0.3) * 0.012,
+    fHand: [p.fHand[0], p.fHand[1] + lag * 0.7],
+    bHand: [p.bHand[0], p.bHand[1] + lag * 0.5],
+  };
 }
+
+/** 격투 자세 — 무릎을 굽혔다 폈다 하며 리듬을 타고, 손은 반 박자 늦게 흔들린다 */
+function stance(time: number, side: number, quick: number): Pose {
+  const w = time * (4.4 + quick * 0.8) + side * 1.7;
+  const bob = (1 - Math.cos(w)) * 1.6;
+  const lag = (1 - Math.cos(w - 0.8)) * 1.4;
+  return {
+    ...BASE,
+    hip: [Math.sin(w * 0.5) * 0.8, BASE.hip[1] + bob],
+    lean: BASE.lean + Math.sin(w - 0.4) * 0.018,
+    head: Math.sin(w - 1.1) * 0.025,
+    fHand: [BASE.fHand[0] + Math.sin(w * 0.5 + 0.6) * 1.2, BASE.fHand[1] + lag * 0.9],
+    bHand: [BASE.bHand[0] - Math.sin(w * 0.5) * 1, BASE.bHand[1] + lag * 0.7],
+  };
+}
+
+const DASH_FWD = P({
+  hip: [8, -56],
+  lean: 0.52,
+  head: -0.3,
+  fHand: [12, 14],
+  bHand: [-22, 18],
+  fFoot: [34, -6],
+  bFoot: [-40, -4],
+});
+const DASH_BACK = P({
+  hip: [-4, -70],
+  lean: -0.2,
+  head: 0.16,
+  fHand: [20, -10],
+  bHand: [14, -4],
+  fFoot: [18, -10],
+  bFoot: [-14, -16],
+});
 
 /** 지금 상태에 맞는 자세 */
 export function poseFor(f: Fighter, time: number): Pose {
   const def = f.def;
   switch (f.act) {
     case 'idle':
+      return stance(time, f.side, def.stats.speed < 0 ? 1 : 0);
     case 'intro':
       return breathe(POSE.idle, time + f.side);
     case 'walk': {
-      const ph = f.t * 0.2 * (def.stats.walk / 3.4) * f.walkDir;
+      // 걷기 — 뻗는 발이 들리고(무릎이 앞으로), 골반은 한 걸음마다 오르내리고, 팔은 다리와 반대로 흔든다
+      const dir = f.walkDir;
+      const ph = f.t * 0.24 * (def.stats.walk / 3.4) * dir;
       const s = Math.sin(ph);
       const c = Math.cos(ph);
+      const stride = dir > 0 ? 16 : 12;
       return {
         ...POSE.idle,
-        hip: [0, -66 + Math.abs(s) * 2],
-        lean: 0.1 * f.walkDir + 0.06,
-        fFoot: [19 + s * 15, -Math.max(0, c) * 8],
-        bFoot: [-19 - s * 15, -Math.max(0, -c) * 8],
-        fHand: [24 - s * 4, -2 + s * 2],
+        hip: [s * 1.5 * dir, -65 + Math.abs(s) * 2.6],
+        lean: (dir > 0 ? 0.17 : 0.02) + Math.abs(c) * 0.025,
+        head: dir > 0 ? -0.06 : 0.04,
+        fFoot: [19 + s * stride, -Math.max(0, c) * 11],
+        bFoot: [-19 - s * stride, -Math.max(0, -c) * 11],
+        fHand: [23 - s * 5, -2 + Math.abs(c) * 2],
+        bHand: [16 + s * 6, 2 + Math.abs(c) * 2],
       };
+    }
+    case 'dash': {
+      const fwd = f.walkDir > 0;
+      const k = f.t / (fwd ? DASH_FRAMES : BACKDASH_FRAMES);
+      if (fwd) {
+        // 앞 대시 — 몸을 낮게 숙이고 큰 보폭으로 달린다
+        const ph = f.t * 0.95;
+        const s = Math.sin(ph);
+        const c = Math.cos(ph);
+        const run: Pose = {
+          ...DASH_FWD,
+          hip: [DASH_FWD.hip[0], DASH_FWD.hip[1] + Math.abs(s) * 3],
+          fFoot: [12 + s * 26, -Math.max(0, c) * 18],
+          bFoot: [-14 - s * 26, -Math.max(0, -c) * 18],
+          fHand: [12 - s * 10, 14],
+          bHand: [-20 + s * 10, 18],
+        };
+        const enter = smooth(k / 0.2);
+        const exit = smooth((k - 0.72) / 0.28);
+        return lerpPose(lerpPose(POSE.idle, run, enter), POSE.idle, exit);
+      }
+      // 백대시 — 뒤로 살짝 뛰었다가 착지
+      const arc = Math.sin(Math.min(1, k / 0.8) * Math.PI);
+      const hop: Pose = {
+        ...DASH_BACK,
+        hip: [DASH_BACK.hip[0], -64 - arc * 12],
+        fFoot: [18, -arc * 16],
+        bFoot: [-14, -arc * 22],
+      };
+      return lerpPose(
+        lerpPose(POSE.idle, hop, smooth(k / 0.15)),
+        POSE.idle,
+        smooth((k - 0.8) / 0.2),
+      );
     }
     case 'crouch':
       return breathe(POSE.crouch, time, 0.8);
     case 'jumpsquat':
-    case 'land':
-      return lerpPose(POSE.idle, POSE.crouch, 0.7);
+      // 도약 직전 — 깊게 웅크린다
+      return lerpPose(POSE.idle, { ...POSE.crouch, lean: 0.2 }, snap(f.t / JUMP_SQUAT) * 0.85);
+    case 'land': {
+      // 착지 — 충격을 무릎으로 받고 일어선다
+      const k = f.t / Math.max(1, f.landLag);
+      return lerpPose({ ...POSE.crouch, lean: 0.24 }, POSE.idle, smooth(k) * 0.9);
+    }
     case 'air': {
+      // 오를 땐 몸을 펴고, 정점에선 무릎을 끌어올리고, 떨어질 땐 다리를 내린다
       const k = Math.max(-1, Math.min(1, f.vy / 12));
-      return { ...POSE.air, lean: 0.05 - k * 0.12, fFoot: [16, -30 + k * 6] };
+      const tuck = 1 - Math.abs(k);
+      return {
+        ...POSE.air,
+        hip: [0, -72 + tuck * 3],
+        lean: 0.05 - k * 0.12 + tuck * 0.12,
+        head: -k * 0.08,
+        fHand: [22 - tuck * 4, 2 - k * 8],
+        bHand: [14 - tuck * 2, 8 - k * 10],
+        fFoot: [16 + tuck * 6, -30 + k * 6 - tuck * 12],
+        bFoot: [-12 + tuck * 6, -22 + k * 10 - tuck * 14],
+      };
     }
-    case 'guard':
-      return f.guardLow ? POSE.cguard : POSE.guard;
-    case 'blockstun': {
+    case 'guard': {
+      // 가드 — 2~3프레임 만에 팔을 바짝 붙이고 몸을 움츠린다
       const p = f.guardLow ? POSE.cguard : POSE.guard;
-      return { ...p, hip: [p.hip[0] - 3, p.hip[1]] };
+      const start = f.guardLow ? POSE.crouch : POSE.idle;
+      return breathe(lerpPose(start, p, snap(f.t / 3)), time, 0.5);
     }
-    case 'hitstun':
+    case 'blockstun': {
+      // 막은 충격 — 처음 몇 프레임 뒤로 밀렸다가 원래 가드 자세로
+      const p = f.guardLow ? POSE.cguard : POSE.guard;
+      const kick = Math.max(0, 1 - f.t / 6);
+      return {
+        ...p,
+        hip: [p.hip[0] - 3 - kick * 5, p.hip[1] + kick * 2],
+        lean: p.lean - kick * 0.12,
+        head: p.head + kick * 0.1,
+        fHand: [p.fHand[0] - kick * 3, p.fHand[1] + kick * 2],
+      };
+    }
+    case 'hitstun': {
       if (f.airborne) return { ...POSE.airHit, spin: -Math.min(0.9, f.juggle * 0.12) };
-      return POSE.hit;
-    case 'knockdown':
-      return POSE.down;
-    case 'getup':
-      return lerpPose(POSE.down, POSE.crouch, ease(f.t / GETUP_FRAMES));
+      // 맞은 순간 크게 젖혔다가 버티며 돌아온다
+      const recoil = Math.max(0, 1 - f.t / 8);
+      const deep: Pose = {
+        ...POSE.hit,
+        hip: [POSE.hit.hip[0] - 4, POSE.hit.hip[1] + 2],
+        lean: POSE.hit.lean - 0.1,
+        head: POSE.hit.head - 0.18,
+      };
+      const settle = smooth((f.t - 6) / Math.max(8, f.stun + 4)) * 0.45;
+      return lerpPose(lerpPose(POSE.hit, deep, recoil * recoil), POSE.idle, settle);
+    }
+    case 'knockdown': {
+      // 바닥에 떨어지며 한 번 튀어 오른다
+      const bounce = f.t < 10 ? Math.sin((f.t / 10) * Math.PI) * 8 * (1 - f.t / 14) : 0;
+      return { ...POSE.down, hip: [POSE.down.hip[0], POSE.down.hip[1] - bounce] };
+    }
+    case 'getup': {
+      const k = f.t / GETUP_FRAMES;
+      if (k < 0.6) return lerpPose(POSE.down, POSE.crouch, smooth(k / 0.6));
+      return lerpPose(POSE.crouch, POSE.idle, smooth((k - 0.6) / 0.4));
+    }
     case 'ko':
       return f.airborne ? { ...POSE.airHit, spin: -0.6 - f.t * 0.03 } : POSE.down;
     case 'win':
-      return breathe(lerpPose(POSE.idle, POSE.win, ease(f.t / 16)), time);
+      return breathe(lerpPose(POSE.idle, POSE.win, snapBack(f.t / 16, 0.8)), time);
     case 'attack': {
       const d = f.moveDef;
       if (!d) return POSE.idle;
@@ -381,13 +520,17 @@ export function poseFor(f: Fighter, time: number): Pose {
       const activeEnd = d.startup + d.active;
       let pose: Pose;
       if (t <= d.startup) {
+        // 준비 동작(힘 모으기) → 탄력 있게 뻗기
         const k = d.startup > 0 ? t / d.startup : 1;
+        const wind = d.startup >= 6 ? 0.55 : 0.4;
         pose =
-          k < 0.7
-            ? lerpPose(base, pair[0], ease(k / 0.7))
-            : lerpPose(pair[0], pair[1], ease((k - 0.7) / 0.3));
+          k < wind
+            ? lerpPose(base, pair[0], smooth(k / wind))
+            : lerpPose(pair[0], pair[1], snapBack((k - wind) / (1 - wind), 0.9));
       } else if (t <= activeEnd) {
-        pose = pair[1];
+        // 타격 — 뻗은 자세에서 몸이 조금 더 따라 들어간다 (팔로 스루)
+        const k = (t - d.startup) / Math.max(1, d.active);
+        pose = { ...pair[1], lean: pair[1].lean + Math.sin(k * Math.PI) * 0.05 };
         // 다단히트는 연타하듯 흔든다
         if (d.hits > 2) {
           const w = Math.sin(t * 1.5) * 10;
@@ -398,7 +541,9 @@ export function poseFor(f: Fighter, time: number): Pose {
           };
         }
       } else {
-        pose = lerpPose(pair[1], base, ease((t - activeEnd) / Math.max(1, d.recovery)));
+        // 회수 — 잠깐 버텼다가 부드럽게 자세로 돌아온다
+        const k = (t - activeEnd) / Math.max(1, d.recovery);
+        pose = lerpPose(pair[1], base, smooth((k - 0.12) / 0.88));
       }
       if (d.anim === 'upper' && f.airborne) pose = { ...pose, spin: Math.min(0.3, f.t * 0.02) };
       return pose;

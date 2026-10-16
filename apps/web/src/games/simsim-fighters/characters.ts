@@ -1894,6 +1894,21 @@ export const ULT_EXPLOSION: ProjSpec = proj({
 export type MoveSet = Record<MoveId, MoveDef>;
 
 /**
+ * 템포 보정 — 모든 기술의 발생 · 후딜을 줄여 공방을 빠르게 한다.
+ * 가드 경직도 조금 줄여 막은 쪽이 더 빨리 반격할 수 있게 한다 (피격 경직은 그대로 → 콤보 유지).
+ * 초필살기 · 버스트는 컷인 연출이 있으니 발생은 그대로 두고 후딜만 줄인다.
+ */
+function quicken(m: MoveDef): MoveDef {
+  const big = m.superLevel > 0 || m.id === 'burst';
+  return {
+    ...m,
+    startup: big ? m.startup : Math.max(2, Math.round(m.startup * 0.8)),
+    recovery: Math.max(4, Math.round(m.recovery * (big ? 0.85 : 0.76))),
+    blockstun: Math.max(6, Math.round(m.blockstun * 0.88)),
+  };
+}
+
+/**
  * CharacterRegistry — 캐릭터 정의와 기술표를 한곳에서 꺼내 쓴다.
  * 기술표는 처음 요청할 때 한 번만 만들어 둔다.
  */
@@ -1915,7 +1930,7 @@ export class CharacterRegistry {
     const cached = this.moveCache.get(id);
     if (cached) return cached;
     const c = this.get(id);
-    const set: MoveSet = {
+    const raw: MoveSet = {
       ...buildNormals(c),
       sp1: buildSpecial(c, 'sp1', c.sp1),
       sp2: buildSpecial(c, 'sp2', c.sp2),
@@ -1923,6 +1938,7 @@ export class CharacterRegistry {
       ult: buildSuper(c, true),
       burst: BURST_MOVE,
     };
+    const set = Object.fromEntries(Object.entries(raw).map(([k, m]) => [k, quicken(m)])) as MoveSet;
     this.moveCache.set(id, set);
     return set;
   }

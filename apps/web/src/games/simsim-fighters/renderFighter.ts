@@ -8,6 +8,7 @@
 import { GROUND_Y } from './config';
 import type { AnimKey, CharId, CharacterDef, Palette } from './characters';
 import type { Fighter } from './fighter';
+import { drawAura } from './aura';
 import { LOOKS, type Look } from './looks';
 import {
   INK,
@@ -120,6 +121,15 @@ function ik(a: V, target: V, l1: number, l2: number, bend: number): [V, V] {
   return [joint, end];
 }
 
+/** 팔 길이보다 멀리 뻗으면 어깨가 그만큼 따라 나간다 (어깨 내밀기) */
+function reachShoulder(sh: V, rel: V): V {
+  const d = Math.hypot(rel[0], rel[1]);
+  const over = d - (UPPER + FORE - 3);
+  if (over <= 0 || d === 0) return sh;
+  const k = Math.min(7, over * 0.7) / d;
+  return [sh[0] + rel[0] * k, sh[1] + rel[1] * k];
+}
+
 function buildRig(p: Pose): Rig {
   const hip = p.hip;
   const sx = Math.sin(p.lean);
@@ -127,12 +137,18 @@ function buildRig(p: Pose): Rig {
   const neck: V = [hip[0] + sx * T_LEN, hip[1] + sy * T_LEN];
   const ha = p.lean + p.head;
   const head: V = [neck[0] + Math.sin(ha) * (HEAD_R + 5), neck[1] - Math.cos(ha) * (HEAD_R + 5)];
-  const fSh: V = [neck[0] + 3, neck[1] + 5];
-  const bSh: V = [neck[0] - 5, neck[1] + 6];
-  const [fEl, fHand] = ik(fSh, [fSh[0] + p.fHand[0], fSh[1] + p.fHand[1]], UPPER, FORE, 1);
-  const [bEl, bHand] = ik(bSh, [bSh[0] + p.bHand[0], bSh[1] + p.bHand[1]], UPPER, FORE, 1);
-  const fHip: V = [hip[0] + 5, hip[1]];
-  const bHip: V = [hip[0] - 5, hip[1]];
+  const fSh0: V = [neck[0] + 3, neck[1] + 5];
+  const bSh0: V = [neck[0] - 5, neck[1] + 6];
+  const fT: V = [fSh0[0] + p.fHand[0], fSh0[1] + p.fHand[1]];
+  const bT: V = [bSh0[0] + p.bHand[0], bSh0[1] + p.bHand[1]];
+  const fSh = reachShoulder(fSh0, p.fHand);
+  const bSh = reachShoulder(bSh0, p.bHand);
+  const [fEl, fHand] = ik(fSh, fT, UPPER, FORE, 1);
+  const [bEl, bHand] = ik(bSh, bT, UPPER, FORE, 1);
+  // 골반도 디딘 발 쪽으로 살짝 돌아간다 (앞발을 크게 뻗으면 앞 골반이 따라 나감)
+  const twist = Math.max(-3, Math.min(3, (p.fFoot[0] - hip[0] - 21) * 0.08));
+  const fHip: V = [hip[0] + 5 + twist, hip[1]];
+  const bHip: V = [hip[0] - 5 + twist * 0.4, hip[1]];
   const [fKnee, fFoot] = ik(fHip, p.fFoot, THIGH, SHIN, -1);
   const [bKnee, bFoot] = ik(bHip, p.bFoot, THIGH, SHIN, -1);
   return {
@@ -742,6 +758,7 @@ function drawTorso(ctx: CanvasRenderingContext2D, c: Ctx) {
   ctx.closePath();
   ctx.fill();
   costume(ctx, c, W, C);
+  if (!c.tint) volume(ctx, C * 0.38, -T * 0.66, T * 1.05, c.robot ? 0.22 : 0.16);
   // 앞쪽 가장자리 빛
   if (!c.tint) {
     ctx.strokeStyle = top.light;
@@ -760,6 +777,17 @@ function drawTorso(ctx: CanvasRenderingContext2D, c: Ctx) {
   ctx.stroke();
   costumeOuter(ctx, c, C);
   ctx.restore();
+}
+
+/** 둥근 볼륨 음영 — (x, y) 가 가장 밝고 반지름 r 바깥으로 갈수록 그늘 (현재 클립 안에만 칠한다) */
+function volume(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, hi: number) {
+  const g = ctx.createRadialGradient(x, y, r * 0.04, x, y, r);
+  g.addColorStop(0, `rgba(255,255,255,${hi})`);
+  g.addColorStop(0.35, 'rgba(255,255,255,0)');
+  g.addColorStop(0.7, 'rgba(24,8,44,0.08)');
+  g.addColorStop(1, 'rgba(24,8,44,0.36)');
+  ctx.fillStyle = g;
+  ctx.fillRect(x - r * 2, y - r * 2, r * 4, r * 4);
 }
 
 /** 몸통 안쪽 의상 디테일 (몸통 모양으로 잘려 있다) — 좌표: 골반 (0,0), 위가 -y, 앞이 +x */
@@ -2100,6 +2128,7 @@ function drawHead(ctx: CanvasRenderingContext2D, c: Ctx) {
   ctx.ellipse(-9, 2, 9, 16, 0, 0, TAU);
   ctx.fill();
   ctx.fillRect(-14, 9, 30, 6);
+  if (!tint) volume(ctx, 7, -6, 20, 0.2);
   if (!c.male && !tint) {
     ctx.fillStyle = 'rgba(255,110,130,0.28)';
     ctx.beginPath();
@@ -4616,7 +4645,7 @@ export function drawFighter(
     glow: !!d && (d.superLevel > 0 || d.id === 'burst'),
     expr: exprFor(f),
   };
-  const pose = poseFor(f, time);
+  const pose = followPose(f, poseFor(f, time), time);
 
   // 돌진 잔상 — 캐릭터 색 실루엣
   if (afterimage && d && d.selfVx > 0 && f.isActive()) {
@@ -4638,9 +4667,88 @@ export function drawFighter(
   ctx.save();
   ctx.translate(f.x, gy);
   ctx.scale(f.facing * s, s);
+  const power = st.glow ? 1 : f.act === 'dash' ? 0.7 : 0.45;
+  drawAura(ctx, def, time, 'back', power);
   if (def.back === 'puppet') drawPuppet(ctx, def, f, time, st.flash ? '#ffffff' : null);
+  drawRimLight(ctx, def, pose, st);
   drawRig(ctx, def, pose, st);
+  drawAura(ctx, def, time, 'front', power);
   ctx.restore();
+}
+
+/**
+ * 역광 림 라이트 — 캐릭터 색 실루엣을 뒤쪽 위로 살짝 비켜 먼저 그려,
+ * 등 · 머리 가장자리에 고유색 빛 테두리가 생기게 한다 (입체감 + 캐릭터 구분)
+ */
+function drawRimLight(ctx: CanvasRenderingContext2D, def: CharacterDef, pose: Pose, st: DrawState) {
+  if (st.flash || st.tint) return;
+  ctx.save();
+  ctx.globalAlpha *= 0.75;
+  ctx.translate(-2.6, -2);
+  drawRig(ctx, def, pose, { ...st, glow: false, tint: def.glow });
+  ctx.restore();
+}
+
+/* ---------------- 부드러운 관절 움직임 ---------------- */
+
+interface Motion {
+  pose: Pose;
+  time: number;
+}
+const motions = new WeakMap<Fighter, Motion>();
+
+/** 상태마다 목표 자세를 따라가는 빠르기 (1초 기준) — 공격 · 가드는 거의 즉시 */
+function followRate(f: Fighter) {
+  switch (f.act) {
+    case 'attack':
+    case 'guard':
+    case 'blockstun':
+      return 95;
+    case 'hitstun':
+      return 70;
+    case 'dash':
+      return 55;
+    case 'knockdown':
+    case 'ko':
+      return 24;
+    default:
+      return 34;
+  }
+}
+
+/**
+ * 상태가 바뀔 때 자세가 툭 끊기지 않도록 목표 자세를 빠르게 따라간다.
+ * 관절마다 따라가는 속도가 달라서 (골반 → 손 → 머리 순) 몸이 채찍처럼 이어 움직인다.
+ */
+function followPose(f: Fighter, target: Pose, time: number): Pose {
+  const m = motions.get(f);
+  if (!m || time < m.time || time - m.time > 0.25) {
+    motions.set(f, { pose: target, time });
+    return target;
+  }
+  const dt = time - m.time;
+  if (dt <= 0) return m.pose;
+  m.time = time;
+  const rate = followRate(f);
+  const k = (mul: number) => 1 - Math.exp(-rate * mul * dt);
+  const body = k(1);
+  const feet = k(1.25);
+  const hands = k(0.82);
+  const head = k(0.55);
+  const lv = (a: V, b: V, t: number): V => [lerp(a[0], b[0], t), lerp(a[1], b[1], t)];
+  const p = m.pose;
+  m.pose = {
+    hip: lv(p.hip, target.hip, body),
+    lean: lerp(p.lean, target.lean, body),
+    head: lerp(p.head, target.head, head),
+    fHand: lv(p.fHand, target.fHand, hands),
+    bHand: lv(p.bHand, target.bHand, hands * 0.92),
+    fFoot: lv(p.fFoot, target.fFoot, feet),
+    bFoot: lv(p.bFoot, target.bFoot, feet),
+    weapon: lerp(p.weapon, target.weapon, hands),
+    spin: lerp(p.spin, target.spin, body),
+  };
+  return m.pose;
 }
 
 /** 땅 그림자 */
@@ -4665,6 +4773,7 @@ export function drawPortrait(
   scale: number,
   time: number,
   kind: 'idle' | 'super' | 'win' = 'idle',
+  aura = true,
 ) {
   const pose =
     kind === 'super'
@@ -4675,13 +4784,17 @@ export function drawPortrait(
   ctx.save();
   ctx.translate(x, y);
   ctx.scale(scale * def.scale, scale * def.scale);
-  if (def.back === 'puppet') drawPuppet(ctx, def, null, time, null);
-  drawRig(ctx, def, pose, {
+  const st: DrawState = {
     ...NO_STATE,
     time,
     glow: kind === 'super',
     expr: kind === 'idle' ? 'normal' : 'shout',
-  });
+  };
+  if (aura) drawAura(ctx, def, time, 'back', kind === 'super' ? 1 : 0.6);
+  if (def.back === 'puppet') drawPuppet(ctx, def, null, time, null);
+  drawRimLight(ctx, def, pose, st);
+  drawRig(ctx, def, pose, st);
+  if (aura) drawAura(ctx, def, time, 'front', kind === 'super' ? 1 : 0.6);
   ctx.restore();
 }
 
@@ -4697,7 +4810,7 @@ export function portraitIcon(def: CharacterDef): HTMLCanvasElement | null {
   const g = cv.getContext('2d');
   if (!g) return null;
   // 얼굴이 가운데 오도록 크게
-  drawPortrait(g, def, 60, 64 + 142 * 1.2, 1.2 / def.scale, 0.4, 'idle');
+  drawPortrait(g, def, 60, 64 + 142 * 1.2, 1.2 / def.scale, 0.4, 'idle', false);
   iconCache.set(def.id, cv);
   return cv;
 }
